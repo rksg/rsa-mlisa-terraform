@@ -1,0 +1,44 @@
+{
+  "stg": {
+    "project_id": "ops-alto-01",
+    "region": "us-central1",
+    "dr_project_id": "ruckussgdc-mlisa-beta",
+    "dr_region": "us-central1",
+    "rai": {
+      "vpc": "mlisa-sa"
+    },
+    "r1-rai": {
+      "vpc": "main"
+    }
+  },
+  "prod-us": {
+    "project_id": "ops-alto-prod",
+    "region": "us-central1",
+    "rai": {
+      "vpc": "mlisa-sa"
+    },
+    "r1-rai": {
+      "vpc": "mlisa-alto"
+    }
+  },
+  "prod-eu": {
+    "project_id": "ops-alto-eu",
+    "region": "europe-west3",
+    "rai": {
+      "vpc": "mlisa-sa-eu-prod"
+    },
+    "r1-rai": {
+      "vpc": "mlisa-alto-eu"
+    }
+  },
+  "prod-asia": {
+    "project_id": "ops-alto-as",
+    "region": "asia-southeast1",
+    "rai": {
+      "vpc": "mlisa-rai-sg"
+    },
+    "r1-rai": {
+      "vpc": "mlisa-alto-sg"
+    }
+  }
+}

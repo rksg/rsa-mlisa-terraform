@@ -40,6 +40,16 @@ variable "source_subnetwork_ip_ranges_to_nat" {
   }
 }
 
+variable "max_ports_per_vm" {
+  description = "Maximum number of ports allocated to a VM from the NAT external IP address pool"
+  type        = number
+  
+  validation {
+    condition     = var.max_ports_per_vm >= 1 && var.max_ports_per_vm <= 65536
+    error_message = "max_ports_per_vm must be between 1 and 65536."
+  }
+}
+
 variable "nat_log_config_enable" {
   description = "Whether to enable logging for the NAT"
   type        = bool

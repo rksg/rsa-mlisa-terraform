@@ -10,6 +10,7 @@ resource "google_compute_router_nat" "nat" {
   region                             = google_compute_router.router.region
   nat_ip_allocate_option             = var.nat_ip_allocate_option
   source_subnetwork_ip_ranges_to_nat = var.source_subnetwork_ip_ranges_to_nat
+  max_ports_per_vm                   = var.max_ports_per_vm
 
   log_config {
     enable = var.nat_log_config_enable

@@ -198,6 +198,7 @@ class GCPResourceReader:
                         'name': router.nats[0].name,
                         'nat_ip_allocate_option': router.nats[0].nat_ip_allocate_option.name if hasattr(router.nats[0].nat_ip_allocate_option, 'name') else str(router.nats[0].nat_ip_allocate_option),
                         'source_subnetwork_ip_ranges_to_nat': router.nats[0].source_subnetwork_ip_ranges_to_nat.name if hasattr(router.nats[0].source_subnetwork_ip_ranges_to_nat, 'name') else str(router.nats[0].source_subnetwork_ip_ranges_to_nat),
+                        'max_ports_per_vm': router.nats[0].max_ports_per_vm,
                         'log_config': {
                             'enable': router.nats[0].log_config.enable,
                             'filter': router.nats[0].log_config.filter.name if hasattr(router.nats[0].log_config.filter, 'name') else str(router.nats[0].log_config.filter)

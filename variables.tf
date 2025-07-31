@@ -79,3 +79,71 @@ variable "vpc_peer_global_addresses" {
   }))
   default = []
 }
+
+variable "dataproc_cluster" {
+  description = "DataProc cluster configuration"
+  type = object({
+    cluster_name = string
+    labels       = map(string)
+    cluster_config = object({
+      gce_cluster_config = object({
+        internal_ip_only = bool
+        subnetwork       = string
+        tags             = list(string)
+      })
+      master_config = object({
+        num_instances    = number
+        machine_type     = string
+        image            = string
+        preemptibility   = string
+        disk_config = object({
+          boot_disk_size_gb = number
+          boot_disk_type    = string
+        })
+      })
+      worker_config = object({
+        num_instances    = number
+        machine_type     = string
+        image            = string
+        preemptibility   = string
+        disk_config = object({
+          boot_disk_size_gb = number
+          boot_disk_type    = string
+        })
+      })
+      software_config = object({
+        image_version = string
+        properties    = optional(map(string))
+      })
+    })
+  })
+  default = null
+}
+
+
+variable "firewall_rules" {
+  description = "List of firewall rules"
+  type = list(object({
+    name                      = string
+    description               = string
+    network                   = string
+    priority                  = number
+    direction                 = string
+    disabled                  = bool
+    source_ranges             = list(string)
+    destination_ranges        = list(string)
+    source_tags               = list(string)
+    target_tags               = list(string)
+    source_service_accounts   = list(string)
+    target_service_accounts   = list(string)
+    allowed = list(object({
+      ip_protocol = string
+      ports       = list(string)
+    }))
+    denied = list(object({
+      ip_protocol = string
+      ports       = list(string)
+    }))
+  }))
+  default = []
+}

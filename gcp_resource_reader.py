@@ -212,14 +212,14 @@ class GCPResourceReader:
             raise ValueError(f"Error getting NAT routers: {e}")
         return routers
 
-    def get_dataproc_clusters(self) -> List[Dict[str, Any]]:
+    def get_dataproc_clusters(self) -> Dict[str, Any]:
         """
-        Get all DataProc clusters in the project that use the specified subnetwork.
+        Get the first DataProc cluster in the project that uses the specified subnetwork.
         
         Returns:
-            List of DataProc cluster configurations
+            Dictionary containing the first DataProc cluster configuration or empty dict if none found
         """
-        clusters = []
+        cluster_info = {}
         
         try:
             result = subprocess.run([
@@ -241,16 +241,17 @@ class GCPResourceReader:
                                     'subnetwork': cluster_subnetwork,
                                     'tags': cluster['config']['gceClusterConfig'].get('tags')
                                 } if cluster['config'].get('gceClusterConfig') else None,
-                            },
-                            'master_config': self._extract_dataproc_node_config(cluster['config'].get('masterConfig')),
-                            'worker_config': self._extract_dataproc_node_config(cluster['config'].get('workerConfig')),
-                            'software_config': self._extract_software_config(cluster['config'].get('softwareConfig')),
+                                'master_config': self._extract_dataproc_node_config(cluster['config'].get('masterConfig')),
+                                'worker_config': self._extract_dataproc_node_config(cluster['config'].get('workerConfig')),
+                                'software_config': self._extract_software_config(cluster['config'].get('softwareConfig'))
+                            }
                         }
-                        clusters.append(cluster_info)
+                        # Return only the first cluster found
+                        break
         except Exception as e:
             print(f"Error getting DataProc clusters: {e}")
             raise ValueError(f"Error getting DataProc clusters: {e}")
-        return clusters
+        return cluster_info
 
     def _extract_dataproc_node_config(self, node_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -658,7 +659,7 @@ class GCPResourceReader:
             'compute_subnetworks': [],
             'nat_routers': [],
             'vpc_access_connectors': [],
-            'dataproc_clusters': [],
+            'dataproc_cluster': {},
             'container_clusters': [],
             'cloud_functions': [],
             'cloud_run_services': [],
@@ -687,8 +688,8 @@ class GCPResourceReader:
             
             # Get DataProc Clusters
             print("Fetching DataProc Clusters...")
-            all_resources['dataproc_clusters'] = self.get_dataproc_clusters()
-            print(f"Found {len(all_resources['dataproc_clusters'])} DataProc Clusters")
+            all_resources['dataproc_cluster'] = self.get_dataproc_clusters()
+            print(f"Found {len(all_resources['dataproc_cluster'])} DataProc Cluster")
             
             # Get Cloud Functions
             print("Fetching Cloud Functions...")

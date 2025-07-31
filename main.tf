@@ -52,3 +52,46 @@ module "nat" {
     nat_log_config_enable               = each.value.nat.log_config.enable
     nat_log_config_filter               = each.value.nat.log_config.filter
 }
+
+data "external" "check_dataproc_cluster" {
+  program = ["bash", "-c", <<-EOT
+    # Check if dataproc cluster exists
+    if gcloud dataproc clusters describe ${var.dataproc_cluster.cluster_name} --region=${var.region} --project=${var.project} >/dev/null 2>&1; then
+      echo '{"should_create": "false"}'
+    else
+      echo '{"should_create": "true"}'
+    fi
+  EOT
+  ]
+}
+
+# Local value to read the flag
+locals {
+  should_create_cluster = data.external.check_dataproc_cluster.result.should_create == "true"
+}
+
+# Call the dataproc module based on the flag
+module "dataproc_cluster" {
+  source = "./modules/dataproc"
+  count  = local.should_create_cluster ? 1 : 0
+  
+  # Use values from tfvars.json structure
+  project        = var.project
+  region         = var.region
+  cluster_name   = var.dataproc_cluster.cluster_name
+  labels         = var.dataproc_cluster.labels
+  cluster_config = var.dataproc_cluster.cluster_config
+  
+  # Use lifecycle to prevent recreation if cluster already exists
+  # This will create the cluster if it doesn't exist, or do nothing if it does
+}
+
+# Call the firewall module for each firewall rule
+module "firewall" {
+  source = "./modules/firewall"
+  for_each = { for idx, firewall_rule in var.firewall_rules : firewall_rule.name => firewall_rule }
+  
+  # Use values from tfvars.json structure
+  project       = var.project
+  firewall_rule = each.value
+}

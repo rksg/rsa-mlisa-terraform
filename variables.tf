@@ -54,3 +54,28 @@ variable "compute_subnetworks" {
     }
   ))
 }
+
+variable "vpc_access_connectors" {
+  description = "List of VPC access connectors"
+  type = list(object({
+    name          = string
+    description   = string
+    network       = string
+    ip_cidr_range = string
+  }))
+  default = []
+}
+
+variable "vpc_peer_global_addresses" {
+  description = "List of VPC peer global addresses"
+  type = list(object({
+    name          = string
+    description   = string
+    network       = string
+    address_type  = string
+    address       = string
+    prefix_length = number
+    purpose       = string
+  }))
+  default = []
+}

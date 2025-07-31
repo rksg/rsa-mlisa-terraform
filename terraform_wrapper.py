@@ -116,7 +116,7 @@ class TerraformWrapper:
             
         except Exception as e:
             print(f"⚠️  Warning: Failed to generate GCP resources: {e}")
-            print("Continuing without GCP resource generation...")
+            raise ValueError(f"Failed to generate GCP resources: {e}")
     
     def _load_config(self) -> Dict:
         """Load configuration from JSON file."""

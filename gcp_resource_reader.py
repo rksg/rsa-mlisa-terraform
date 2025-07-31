@@ -607,6 +607,41 @@ class GCPResourceReader:
             raise ValueError(f"Error getting compute addresses: {e}")   
         return addresses
 
+    def get_global_compute_addresses(self) -> List[Dict[str, Any]]:
+        """
+        Get global compute addresses for the specified network.
+        
+        Returns:
+            List of global compute address dictionaries
+        """
+        addresses = []
+        
+        try:
+            # Use gcloud CLI to get global addresses since the API client doesn't have the method
+            result = subprocess.run([
+                'gcloud', 'compute', 'addresses', 'list', 
+                '--global', '--format=json',
+                '--filter', f'network="{self.network_name}" AND purpose="VPC_PEERING"'
+            ], capture_output=True, text=True, check=True)
+            
+            if result.returncode == 0:
+                for address in json.loads(result.stdout):
+                    address_info = {
+                        'name': address['name'],
+                        'description': address.get('description', ''),
+                        'address_type': address.get('addressType', ''),
+                        'address': address.get('address', ''),
+                        'purpose': address.get('purpose', ''),
+                        'prefix_length': address.get('prefixLength'),
+                        'network': address.get('network', '').rsplit('/', 1)[-1] if address.get('network') else None
+                    }
+                    addresses.append(address_info)
+                    
+        except Exception as e:
+            print(f"Error getting global compute addresses: {e}")
+            raise ValueError(f"Error getting global compute addresses: {e}")   
+        return addresses
+
     def get_all_resources(self) -> Dict[str, Any]:
         """
         Get all resources from all resource types in one call.
@@ -628,7 +663,8 @@ class GCPResourceReader:
             'cloud_functions': [],
             'cloud_run_services': [],
             'firewall_rules': [],
-            'compute_addresses': []
+            'compute_addresses': [],
+            'vpc_peer_global_addresses': []
         }
         
         try:
@@ -673,6 +709,11 @@ class GCPResourceReader:
             print("Fetching Compute Addresses...")
             all_resources['compute_addresses'] = self.get_compute_addresses()
             print(f"Found {len(all_resources['compute_addresses'])} Compute Addresses")
+            
+            # Get Global Compute Addresses
+            print("Fetching Global Compute Addresses...")
+            all_resources['vpc_peer_global_addresses'] = self.get_global_compute_addresses()
+            print(f"Found {len(all_resources['vpc_peer_global_addresses'])} Global Compute Addresses")
             
             # Get Container Clusters
             print("Fetching Container Clusters...")

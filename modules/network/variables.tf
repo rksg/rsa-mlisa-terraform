@@ -18,3 +18,17 @@ variable "auto_create_subnetworks" {
   type        = bool
   default     = false
 }
+
+variable "vpc_peer_global_addresses" {
+  description = "List of VPC peer global addresses"
+  type = list(object({
+    name          = string
+    description   = string
+    address_type  = string
+    purpose       = string
+    prefix_length = number
+    network       = string
+    address       = string
+  }))
+  default = []
+}

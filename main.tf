@@ -6,6 +6,7 @@ module "network" {
   project         = var.project
   compute_network = var.compute_network.name
   region          = var.region
+  vpc_peer_global_addresses = var.vpc_peer_global_addresses
 }
 
 # Call the subnetwork module for each subnetwork
@@ -21,6 +22,19 @@ module "subnetworks" {
   subnet_range_cidr          = each.value.ip_cidr_range
   private_ip_google_access   = each.value.private_ip_google_access
   subnet_secondary_ip_ranges = each.value.secondary_ip_range
+}
+
+# Call the VPC connector module for each connector
+module "vpc_connectors" {
+  source = "./modules/vpc_connect"
+  for_each = { for idx, connector in var.vpc_access_connectors : connector.name => connector }
+  
+  # Use values from tfvars.json structure
+  project                           = var.project
+  region                            = var.region
+  connector_name                    = each.value.name
+  network                           = module.network.network_name
+  gcp_network_range_serverless_cidr = each.value.ip_cidr_range
 }
 
 module "nat" {

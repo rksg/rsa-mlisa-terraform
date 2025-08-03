@@ -221,3 +221,78 @@ variable "cloud_functions" {
   }))
   default = []
 }
+
+variable "container_clusters" {
+  description = "List of GKE container clusters"
+  type = list(object({
+    name = string
+    network = string
+    subnetwork = string
+    default_max_pods_per_node = string
+    ip_allocation_policy = object({
+      cluster_secondary_range_name  = string
+      services_secondary_range_name = string
+    })
+    logging_service = string
+    monitoring_service = string
+    private_cluster_config = object({
+      enable_private_nodes    = bool
+      master_ipv4_cidr_block = string
+    })
+    addons_config = object({
+      kubernetes_dashboard = object({
+        disabled = bool
+      })
+      network_policy_config = object({
+        disabled = bool
+      })
+      gce_persistent_disk_csi_driver_config = object({
+        enabled = bool
+      })
+      gcs_fuse_csi_driver_config = object({
+        enabled = bool
+      })
+    })
+    database_encryption = object({
+      state = string
+    })
+    cluster_autoscaling = object({
+      autoscaling_profile = string
+    })
+    node_pools = list(object({
+      name = string
+      autoscaling = object({
+        enabled             = bool
+        total_min_node_count = number
+        total_max_node_count = number
+        max_node_count      = number
+        min_node_count      = number
+        location_policy     = string
+      })
+      max_pods_constraint = object({
+        max_pods_per_node = string
+      })
+      management = object({
+        auto_repair = bool
+      })
+      upgrade_settings = object({
+        max_surge = number
+      })
+      node_config = object({
+        machine_type = string
+        disk_size_gb = number
+        disk_type    = string
+        image_type   = string
+        labels       = map(string)
+        linux_node_config = map(string)
+        service_account = string
+        oauth_scopes    = list(string)
+        shielded_instance_config = object({
+          enableIntegrityMonitoring = bool
+        })
+        metadata = map(string)
+      })
+    }))
+  }))
+  default = []
+}

@@ -441,7 +441,6 @@ class GCPResourceReader:
                         'addons_config': self._extract_addons_config(cluster.get('addonsConfig')),
                         'database_encryption': self._extract_database_encryption(cluster.get('databaseEncryption')),
                         'cluster_autoscaling': self._extract_cluster_autoscaling(cluster.get('autoscaling')),
-                        'resource_labels': dict(cluster['resourceLabels']),
                         'node_pools': self._extract_node_pools(cluster.get('nodePools', []))
                     }
                     clusters.append(cluster_info)
@@ -535,7 +534,8 @@ class GCPResourceReader:
                     'service_account': node_pool.get('config', {}).get('serviceAccount'),
                     'oauth_scopes': node_pool.get('config', {}).get('oauthScopes', []),
                     'shielded_instance_config': node_pool.get('config', {}).get('shieldedInstanceConfig'),
-                    'metadata': node_pool.get('config', {}).get('metadata', {})
+                    'metadata': node_pool.get('config', {}).get('metadata', {}),
+                    'linux_node_config': node_pool.get('config', {}).get('linuxNodeConfig')
                 }
             }
             extracted_pools.append(pool_info)

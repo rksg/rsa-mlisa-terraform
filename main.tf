@@ -160,3 +160,25 @@ module "cloud_functions" {
   min_instances          = each.value.min_instances
   max_instances          = each.value.max_instances
 }
+
+# Call the Container Cluster module for each cluster
+module "container_clusters" {
+  source = "./modules/container_cluster"
+  for_each = { for idx, cluster in var.container_clusters : cluster.name => cluster }
+  
+  # Use values from tfvars.json structure
+  project                    = var.project
+  region                     = var.region
+  cluster_name               = each.value.name
+  network                    = each.value.network
+  subnetwork                 = each.value.subnetwork
+  default_max_pods_per_node  = each.value.default_max_pods_per_node
+  ip_allocation_policy      = each.value.ip_allocation_policy
+  logging_service            = each.value.logging_service
+  monitoring_service         = each.value.monitoring_service
+  private_cluster_config     = each.value.private_cluster_config
+  addons_config             = each.value.addons_config
+  database_encryption       = each.value.database_encryption
+  cluster_autoscaling       = each.value.cluster_autoscaling
+  node_pools                = each.value.node_pools
+}

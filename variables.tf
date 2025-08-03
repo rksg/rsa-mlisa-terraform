@@ -147,3 +147,77 @@ variable "firewall_rules" {
   }))
   default = []
 }
+
+variable "cloud_run_services" {
+  description = "List of Cloud Run services"
+  type = list(object({
+    name = string
+    template = object({
+      metadata = object({
+        annotations = map(string)
+      })
+      spec = object({
+        timeout_seconds      = number
+        container_concurrency = number
+        containers = list(object({
+          image   = string
+          command = list(string)
+          args    = list(string)
+          env = list(object({
+            name  = string
+            value = string
+          }))
+          resources = object({
+            limits = object({
+              cpu    = string
+              memory = string
+            })
+          })
+          ports = list(object({
+            containerPort = number
+            name         = string
+          }))
+        }))
+      })
+    })
+    traffic = list(object({
+      latestRevision = bool
+      percent        = number
+    }))
+  }))
+  default = []
+}
+
+variable "compute_addresses" {
+  description = "List of compute addresses"
+  type = list(object({
+    name         = string
+    description  = string
+    address_type = string
+    subnetwork   = string
+    network_tier = string
+    purpose      = string
+    ip_version   = string
+  }))
+  default = []
+}
+
+variable "cloud_functions" {
+  description = "List of Cloud Functions"
+  type = list(object({
+    name                  = string
+    runtime               = string
+    available_memory_mb   = number
+    source_archive_bucket = string
+    source_archive_object = string
+    timeout               = number
+    entry_point           = string
+    trigger_http          = bool
+    vpc_connector         = string
+    vpc_connector_egress_settings = string
+    environment_variables  = map(string)
+    min_instances         = number
+    max_instances         = number
+  }))
+  default = []
+}

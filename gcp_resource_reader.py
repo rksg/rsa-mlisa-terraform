@@ -325,9 +325,14 @@ class GCPResourceReader:
                         'available_memory_mb': function['availableMemoryMb'],
                         'source_archive_bucket': function['sourceArchiveUrl'].rsplit('/')[2],
                         'source_archive_object': "/".join(function['sourceArchiveUrl'].rsplit('/')[3:]),
-                        'timeout': function['timeout'],
+                        'timeout': function['timeout'].rsplit('s', 1)[0],
                         'entry_point': function['entryPoint'],
-                        'labels': function['labels']
+                        'trigger_http': True,  # Cloud Functions with VPC connector are HTTP triggered
+                        'vpc_connector': f"projects/{self.project_id}/locations/{self.region}/connectors/{self.subnetwork_name}-func",
+                        'vpc_connector_egress_settings': "PRIVATE_RANGES_ONLY",
+                        'environment_variables': function.get('environmentVariables', {}),
+                        'min_instances': function.get('minInstances', 0),
+                        'max_instances': function.get('maxInstances', 0)
                     }
                     functions.append(function_info)
         except Exception as e:
@@ -370,7 +375,7 @@ class GCPResourceReader:
                                             'image': container['image'],
                                             'command': container.get('command'),
                                             'args': container.get('args'),
-                                            'env': container.get('env'),
+                                            'env': self._extract_container_env(container.get('env', [])),
                                             'resources': container.get('resources'),
                                             'ports': container.get('ports')
                                         } for container in service['spec']['template']['spec'].get('containers', [])
@@ -384,6 +389,28 @@ class GCPResourceReader:
             print(f"Error getting Cloud Run services: {e}")
             raise ValueError(f"Error getting Cloud Run services: {e}")
         return services
+
+    def _extract_container_env(self, env_data) -> List[Dict[str, str]]:
+        """
+        Extract environment variables from container configuration.
+        Handles both list and dictionary formats.
+        
+        Args:
+            env_data: Environment data from container config (can be list or dict)
+            
+        Returns:
+            List of environment variable dictionaries
+        """
+        env_list = []
+        
+        for env_var in env_data:
+            if 'name' in env_var and 'value' in env_var:
+                if env_var['name'] not in ['PIVOT_PROXY_HOST', 'EXPORTER_URL']:
+                    env_list.append({
+                        'name': env_var['name'],
+                        'value': env_var['value']
+                    })
+        return env_list
     
     def get_container_clusters(self) -> List[Dict[str, Any]]:
         """

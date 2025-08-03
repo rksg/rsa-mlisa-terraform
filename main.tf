@@ -95,3 +95,68 @@ module "firewall" {
   project       = var.project
   firewall_rule = each.value
 }
+
+# Call the Compute Address module for each address
+module "compute_addresses" {
+  source = "./modules/compute_address"
+  for_each = { for idx, address in var.compute_addresses : address.name => address }
+  
+  # Use values from tfvars.json structure
+  project       = var.project
+  region        = var.region
+  address_name  = each.value.name
+  description   = each.value.description
+  address_type  = each.value.address_type
+  subnetwork    = each.value.subnetwork
+  network_tier  = each.value.network_tier
+  purpose       = each.value.purpose
+  ip_version    = each.value.ip_version
+}
+
+# Local value to get the core internal LB address
+locals {
+  core_internal_lb_address = try(
+    values({
+      for k, v in module.compute_addresses : k => v.gke_address
+      if can(regex(".*core-lb-internal-ip-address$", k))
+    })[0],
+    ""
+  )
+}
+
+# Call the Cloud Run Services module for each service
+module "cloud_run_services" {
+  source = "./modules/cloud_run"
+  for_each = { for idx, service in var.cloud_run_services : service.name => service }
+  
+  # Use values from tfvars.json structure
+  project      = var.project
+  region       = var.region
+  service_name = each.value.name
+  template     = each.value.template
+  traffic      = each.value.traffic
+  core_internal_ingress_ip = local.core_internal_lb_address
+}
+
+# Call the Cloud Functions module for each function
+module "cloud_functions" {
+  source = "./modules/cloud_function"
+  for_each = { for idx, function in var.cloud_functions : function.name => function }
+  
+  # Use values from tfvars.json structure
+  project                = var.project
+  region                 = var.region
+  function_name          = each.value.name
+  runtime                = each.value.runtime
+  available_memory_mb    = each.value.available_memory_mb
+  source_archive_bucket  = each.value.source_archive_bucket
+  source_archive_object  = each.value.source_archive_object
+  timeout                = each.value.timeout
+  entry_point            = each.value.entry_point
+  trigger_http           = each.value.trigger_http
+  vpc_connector          = each.value.vpc_connector
+  vpc_connector_egress_settings = each.value.vpc_connector_egress_settings
+  environment_variables  = each.value.environment_variables
+  min_instances          = each.value.min_instances
+  max_instances          = each.value.max_instances
+}

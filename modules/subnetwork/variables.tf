@@ -13,6 +13,11 @@ variable "subnet_name" {
   type        = string
 }
 
+variable "description" {
+  description = "Description of the subnetwork"
+  type        = string
+}
+
 variable "subnet_network" {
   description = "The name of the network this subnetwork belongs to"
   type        = string

@@ -140,26 +140,6 @@ check_terraform() {
     fi
 }
 
-# Function to show confirmation for destructive actions
-confirm_destructive_action() {
-    local action=$1
-    local environment=$2
-    local cluster=$3
-    
-    if [[ $action == "apply" || $action == "destroy" ]]; then
-        print_warning "This will perform: $action"
-        print_warning "Environment: $environment"
-        print_warning "Cluster: $cluster"
-        echo
-        read -p "Are you sure you want to continue? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            print_info "Operation cancelled"
-            exit 0
-        fi
-    fi
-}
-
 # Main script
 main() {
     # Check if help is requested
@@ -224,9 +204,6 @@ main() {
     # Check prerequisites
     check_python_script
     check_terraform
-    
-    # Show confirmation for destructive actions
-    confirm_destructive_action "$action" "$environment" "$cluster"
     
     # Build command
     local cmd="python3 terraform_wrapper.py"

@@ -59,9 +59,12 @@ variable "vpc_access_connectors" {
   description = "List of VPC access connectors"
   type = list(object({
     name          = string
-    description   = string
-    network       = string
-    ip_cidr_range = string
+    min_throughput = number
+    max_throughput = number
+    machine_type  = string
+    subnet        = object({
+      name  = string
+    })
   }))
   default = []
 }
@@ -233,6 +236,9 @@ variable "container_clusters" {
       cluster_secondary_range_name  = string
       services_secondary_range_name = string
     })
+    release_channel = object({
+      channel = string
+    })
     logging_service = string
     monitoring_service = string
     private_cluster_config = object({
@@ -261,6 +267,7 @@ variable "container_clusters" {
     })
     node_pools = list(object({
       name = string
+      initial_node_count = number
       autoscaling = object({
         enabled             = bool
         total_min_node_count = number

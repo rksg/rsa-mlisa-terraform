@@ -54,6 +54,12 @@ variable "private_cluster_config" {
   })
 }
 
+variable "release_channel" {
+  type = object({
+      channel = string
+  })
+}
+
 variable "addons_config" {
   description = "Addons configuration for the cluster"
   type = object({
@@ -90,6 +96,7 @@ variable "node_pools" {
   description = "Node pools for the cluster"
   type = list(object({
     name = string
+    initial_node_count = number
     autoscaling = object({
       enabled             = bool
       total_min_node_count = number

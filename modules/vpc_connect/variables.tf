@@ -13,12 +13,17 @@ variable "connector_name" {
   type        = string
 }
 
-variable "gcp_network_range_serverless_cidr" {
-  description = "The IP address range for the VPC connector"
-  type        = string
+variable "min_throughput" {
+  description = "Minimum throughout VPC connector"
+  type        = number
 }
 
-variable "network" {
-  description = "The name of the network to create the VPC connector in"
+variable "max_throughput" {
+  description = "Maximum throughout VPC connector"
+  type        = number
+}
+
+variable "connector_subnet_name" {
+  description = "The name of the subnet network to create the VPC connector in"
   type        = string
 }

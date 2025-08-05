@@ -26,7 +26,6 @@ from typing import Dict, List, Any, Optional, Tuple
 from google.cloud import compute_v1
 from google.cloud import functions_v1
 from google.cloud import run_v2
-from google.cloud import vpcaccess_v1
 from google.cloud import container_v1
 from google.auth import default
 
@@ -76,7 +75,6 @@ class GCPResourceReader:
         self.routers_client = compute_v1.RoutersClient()
         self.functions_client = functions_v1.CloudFunctionsServiceClient()
         self.run_client = run_v2.ServicesClient()
-        self.vpc_access_client = vpcaccess_v1.VpcAccessServiceClient()
         self.container_client = container_v1.ClusterManagerClient()
         self.firewalls_client = compute_v1.FirewallsClient()
         self.addresses_client = compute_v1.AddressesClient()
@@ -118,15 +116,14 @@ class GCPResourceReader:
                 print(f"Error checking network: {e}")
                 raise ValueError(f"Network name '{self.network_name}' not found in project '{self.project_id}'.")
     
-    def get_compute_subnetworks_vpc_connectors(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def get_compute_subnetworks(self) -> List[Dict[str, Any]]:
         """
         Get all Compute Subnetworks in the project, separated by type.
         
         Returns:
-            Tuple of (subnetworks_with_secondary_ranges, vpc_connectors)
+            List of Compute Subnetwork configurations
         """
         subnetworks = []
-        vpc_connectors = []
         
         try:
             request = compute_v1.ListSubnetworksRequest(
@@ -137,39 +134,28 @@ class GCPResourceReader:
             page_result = self.subnetworks_client.list(request=request)
             
             for subnetwork in page_result:
-                # Subnetworks with secondary IP ranges are used for GKE clusters
-                if not subnetwork.secondary_ip_ranges:
-                    # Subnetworks without secondary ranges are used as VPC connectors
-                    connector_info = {
-                        'name': subnetwork.name,
-                        'description': subnetwork.description,
-                        'network': subnetwork.network.rsplit('/', 1)[-1],
-                        'ip_cidr_range': subnetwork.ip_cidr_range,
-                    }
-                    vpc_connectors.append(connector_info)
-                else:
-                    # Update subnetwork name for other resource lookups
+                if subnetwork.secondary_ip_ranges:
                     self.subnetwork_name = subnetwork.name
-                    subnetwork_info = {
-                        'name': subnetwork.name,
-                        'description': subnetwork.description,
-                        'network': subnetwork.network.rsplit('/', 1)[-1],
-                        'ip_cidr_range': subnetwork.ip_cidr_range,
-                        'gateway_address': subnetwork.gateway_address,
-                        'private_ip_google_access': subnetwork.private_ip_google_access,
-                        'secondary_ip_range': [
-                            {
-                                'name': range.range_name,
-                                'ip_cidr_range': range.ip_cidr_range
-                            } for range in subnetwork.secondary_ip_ranges
-                        ] if subnetwork.secondary_ip_ranges else []
-                    }
-                    subnetworks.append(subnetwork_info)
+                subnetwork_info = {
+                    'name': subnetwork.name,
+                    'description': subnetwork.description,
+                    'network': subnetwork.network.rsplit('/', 1)[-1],
+                    'ip_cidr_range': subnetwork.ip_cidr_range,
+                    'gateway_address': subnetwork.gateway_address,
+                    'private_ip_google_access': subnetwork.private_ip_google_access,
+                    'secondary_ip_range': [
+                        {
+                            'name': range.range_name,
+                            'ip_cidr_range': range.ip_cidr_range
+                        } for range in subnetwork.secondary_ip_ranges
+                    ] if subnetwork.secondary_ip_ranges else []
+                }
+                subnetworks.append(subnetwork_info)
         except Exception as e:
             print(f"Error getting compute subnetworks: {e}")
             raise ValueError(f"Error getting compute subnetworks: {e}")
             
-        return subnetworks, vpc_connectors
+        return subnetworks
     
     def get_nat_routers(self) -> List[Dict[str, Any]]:
         """
@@ -212,6 +198,36 @@ class GCPResourceReader:
             raise ValueError(f"Error getting NAT routers: {e}")
         return routers
 
+    def _extract_dataproc_labels(self, labels_data) -> Dict[str, str]:
+        """
+        Extract and filter labels from DataProc cluster configuration.
+        Handles different label formats and filters out unwanted labels.
+        
+        Args:
+            labels_data: Labels data from cluster config (can be list or dict)
+            
+        Returns:
+            Dictionary of filtered labels
+        """
+        labels = {}
+        
+        if not labels_data:
+            return labels
+            
+        if isinstance(labels_data, list):
+            # Labels as list of objects with key/value
+            for label in labels_data:
+                if isinstance(label, dict) and 'key' in label and 'value' in label:
+                    if label['key'] != 'goog-dataproc-cluster-uuid':
+                        labels[label['key']] = label['value']
+        elif isinstance(labels_data, dict):
+            # Labels as direct key-value dictionary
+            labels = {k: v for k, v in labels_data.items() if k != 'goog-dataproc-cluster-uuid'}
+        else:
+            print(f"Unexpected labels format: {type(labels_data)}")
+            
+        return labels
+
     def get_dataproc_clusters(self) -> Dict[str, Any]:
         """
         Get the first DataProc cluster in the project that uses the specified subnetwork.
@@ -234,7 +250,7 @@ class GCPResourceReader:
                     if cluster_subnetwork == self.subnetwork_name:
                         cluster_info = {
                             'cluster_name': cluster['clusterName'],
-                            'labels': cluster['labels'],
+                            'labels': self._extract_dataproc_labels(cluster['labels']),
                             'cluster_config': {
                                 'gce_cluster_config': {
                                     'internal_ip_only': cluster['config']['gceClusterConfig'].get('internalIpOnly'),
@@ -437,6 +453,11 @@ class GCPResourceReader:
                         'ip_allocation_policy': self._extract_ip_allocation_policy(cluster.get('ipAllocationPolicy')),
                         'logging_service': cluster['loggingService'],
                         'monitoring_service': cluster['monitoringService'],
+                        'release_channel': {
+                            'channel': cluster.get('releaseChannel').get('channel')
+                        } if cluster.get('releaseChannel') else {
+                            'channel': 'UNSPECIFIED'
+                        },
                         'private_cluster_config': self._extract_private_cluster_config(cluster.get('privateClusterConfig')),
                         'addons_config': self._extract_addons_config(cluster.get('addonsConfig')),
                         'database_encryption': self._extract_database_encryption(cluster.get('databaseEncryption')),
@@ -508,6 +529,7 @@ class GCPResourceReader:
         for node_pool in node_pools:
             pool_info = {
                 'name': node_pool['name'],
+                'initial_node_count': node_pool.get('initialNodeCount') if node_pool.get('initialNodeCount') else 1,
                 'autoscaling': {
                     'enabled': node_pool.get('autoscaling', {}).get('enabled'),
                     'total_min_node_count': node_pool.get('autoscaling', {}).get('totalMinNodeCount'),
@@ -670,6 +692,42 @@ class GCPResourceReader:
             raise ValueError(f"Error getting global compute addresses: {e}")   
         return addresses
 
+    def get_vpc_access_connectors(self) -> List[Dict[str, Any]]:
+        """
+        Get VPC Access Connectors for the specified network.
+        
+        Returns:
+            List of VPC Access Connector dictionaries
+        """
+        connectors = []
+        
+        try:
+            # Use gcloud CLI to get global addresses since the API client doesn't have the method
+            result = subprocess.run([
+                'gcloud', 'compute', 'networks', 'vpc-access', 'connectors', 'list', 
+                '--region', self.region, '--format=json',
+                '--filter', f'network="{self.network_name}"'
+            ], capture_output=True, text=True, check=True)
+
+            if result.returncode == 0:
+                for connector in json.loads(result.stdout):
+                    connector_info = {
+                        'name': connector['name'].rsplit('/', 1)[-1],
+                        'min_throughput': connector['minThroughput'],
+                        'max_throughput': connector['maxThroughput'],
+                        'machine_type': connector['machineType'],
+                        'subnet': {
+                            'name': connector['subnet']['name']
+                        } if connector['subnet'] else {
+                            'name': connector['name'].rsplit('/', 1)[-1]
+                        }
+                    }
+                    connectors.append(connector_info)
+        except Exception as e:
+            print(f"Error getting VPC Access Connectors: {e}")
+            raise ValueError(f"Error getting VPC Access Connectors: {e}")
+        return connectors
+
     def get_all_resources(self) -> Dict[str, Any]:
         """
         Get all resources from all resource types in one call.
@@ -702,11 +760,10 @@ class GCPResourceReader:
                 'name': self.network_name
             }
             
-            # Get Compute Subnetworks and VPC Connectors
+            # Get Compute Subnetworks
             print("Fetching Compute Subnetworks...")
-            all_resources['compute_subnetworks'], all_resources['vpc_access_connectors'] = self.get_compute_subnetworks_vpc_connectors()
+            all_resources['compute_subnetworks'] = self.get_compute_subnetworks()
             print(f"Found {len(all_resources['compute_subnetworks'])} Compute Subnetworks")
-            print(f"Found {len(all_resources['vpc_access_connectors'])} VPC Access Connectors")
             
             # Get NAT Routers
             print("Fetching NAT Routers...")
@@ -748,6 +805,11 @@ class GCPResourceReader:
             all_resources['container_clusters'] = self.get_container_clusters()
             print(f"Found {len(all_resources['container_clusters'])} Container Clusters")
             
+            # Get VPC Access Connectors
+            #print("Fetching VPC Access Connectors...")
+            #all_resources['vpc_access_connectors'] = self.get_vpc_access_connectors()
+            #print(f"Found {len(all_resources['vpc_access_connectors'])} VPC Access Connectors")
+
         except Exception as e:
             print(f"Error fetching all resources: {e}")
             raise ValueError(f"Error fetching all resources: {e}")

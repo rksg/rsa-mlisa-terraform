@@ -6,6 +6,8 @@ resource "google_container_node_pool" "node_pools" {
   cluster    = google_container_cluster.cluster.name
   project    = var.project
 
+  initial_node_count = each.value.initial_node_count
+
   dynamic "autoscaling" {
     for_each = each.value.autoscaling !=null && each.value.autoscaling.enabled == true ? [each.value.autoscaling] : []
     content {

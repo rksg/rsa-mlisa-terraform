@@ -1,6 +1,7 @@
 resource "google_compute_subnetwork" "subnet" {
   ip_cidr_range              = var.subnet_range_cidr
   name                       = var.subnet_name
+  description                = var.description
   network                    = var.subnet_network
   private_ip_google_access   = var.private_ip_google_access
   private_ipv6_google_access = "DISABLE_GOOGLE_ACCESS"

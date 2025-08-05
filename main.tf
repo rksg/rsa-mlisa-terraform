@@ -12,12 +12,16 @@ module "network" {
 # Call the subnetwork module for each subnetwork
 module "subnetworks" {
   source = "./modules/subnetwork"
+  depends_on = [
+    module.network
+  ]
   for_each = { for idx, subnet in var.compute_subnetworks : subnet.name => subnet }
   
   # Use values from tfvars.json structure
   project                    = var.project
   region                     = var.region
   subnet_name                = each.value.name
+  description                = each.value.description
   subnet_network             = module.network.network_name
   subnet_range_cidr          = each.value.ip_cidr_range
   private_ip_google_access   = each.value.private_ip_google_access
@@ -27,14 +31,19 @@ module "subnetworks" {
 # Call the VPC connector module for each connector
 module "vpc_connectors" {
   source = "./modules/vpc_connect"
+  depends_on = [
+    module.network,
+    module.subnetworks
+  ]
   for_each = { for idx, connector in var.vpc_access_connectors : connector.name => connector }
   
   # Use values from tfvars.json structure
   project                           = var.project
   region                            = var.region
   connector_name                    = each.value.name
-  network                           = module.network.network_name
-  gcp_network_range_serverless_cidr = each.value.ip_cidr_range
+  min_throughput                    = each.value.min_throughput
+  max_throughput                    = each.value.max_throughput
+  connector_subnet_name             = each.value.subnet.name
 }
 
 module "nat" {
@@ -57,7 +66,11 @@ data "external" "check_dataproc_cluster" {
   program = ["bash", "-c", <<-EOT
     # Check if dataproc cluster exists
     if gcloud dataproc clusters describe ${var.dataproc_cluster.cluster_name} --region=${var.region} --project=${var.project} >/dev/null 2>&1; then
-      echo '{"should_create": "false"}'
+      if terraform state list | grep google_dataproc_cluster >/dev/null 2>&1; then
+        echo '{"should_create": "true"}'
+      else
+        echo '{"should_create": "false"}'
+      fi
     else
       echo '{"should_create": "true"}'
     fi
@@ -73,6 +86,10 @@ locals {
 # Call the dataproc module based on the flag
 module "dataproc_cluster" {
   source = "./modules/dataproc"
+  depends_on = [
+    module.network,
+    module.subnetworks
+  ]
   count  = local.should_create_cluster ? 1 : 0
   
   # Use values from tfvars.json structure
@@ -89,6 +106,9 @@ module "dataproc_cluster" {
 # Call the firewall module for each firewall rule
 module "firewall" {
   source = "./modules/firewall"
+  depends_on = [
+    module.dataproc_cluster
+  ]
   for_each = { for idx, firewall_rule in var.firewall_rules : firewall_rule.name => firewall_rule }
   
   # Use values from tfvars.json structure
@@ -100,7 +120,9 @@ module "firewall" {
 module "compute_addresses" {
   source = "./modules/compute_address"
   for_each = { for idx, address in var.compute_addresses : address.name => address }
-  
+  depends_on = [
+    module.subnetworks
+  ]
   # Use values from tfvars.json structure
   project       = var.project
   region        = var.region
@@ -127,6 +149,11 @@ locals {
 # Call the Cloud Run Services module for each service
 module "cloud_run_services" {
   source = "./modules/cloud_run"
+  depends_on = [
+    module.vpc_connectors,
+    module.network,
+    module.subnetworks
+  ]
   for_each = { for idx, service in var.cloud_run_services : service.name => service }
   
   # Use values from tfvars.json structure
@@ -141,7 +168,12 @@ module "cloud_run_services" {
 # Call the Cloud Functions module for each function
 module "cloud_functions" {
   source = "./modules/cloud_function"
-  for_each = { for idx, function in var.cloud_functions : function.name => function }
+  depends_on = [
+    module.vpc_connectors,
+    module.network,
+    module.subnetworks
+  ]
+  for_each = {} #{ for idx, function in var.cloud_functions : function.name => function }
   
   # Use values from tfvars.json structure
   project                = var.project
@@ -164,6 +196,11 @@ module "cloud_functions" {
 # Call the Container Cluster module for each cluster
 module "container_clusters" {
   source = "./modules/container_cluster"
+  depends_on = [
+    module.vpc_connectors,
+    module.network,
+    module.subnetworks
+  ]
   for_each = { for idx, cluster in var.container_clusters : cluster.name => cluster }
   
   # Use values from tfvars.json structure
@@ -177,6 +214,7 @@ module "container_clusters" {
   logging_service            = each.value.logging_service
   monitoring_service         = each.value.monitoring_service
   private_cluster_config     = each.value.private_cluster_config
+  release_channel           = each.value.release_channel
   addons_config             = each.value.addons_config
   database_encryption       = each.value.database_encryption
   cluster_autoscaling       = each.value.cluster_autoscaling

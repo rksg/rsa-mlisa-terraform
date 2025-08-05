@@ -4,6 +4,15 @@ resource "google_dataproc_cluster" "dpc_cluster" {
   project                       = var.project
   graceful_decommission_timeout = "120s"
   labels                        = var.labels
+
+  lifecycle {
+    ignore_changes = [
+      effective_labels,
+      labels,
+      terraform_labels
+    ]
+    prevent_destroy = true
+  }
   
   cluster_config {
     gce_cluster_config {
@@ -15,8 +24,7 @@ resource "google_dataproc_cluster" "dpc_cluster" {
     master_config {
       num_instances  = var.cluster_config.master_config.num_instances
       machine_type   = var.cluster_config.master_config.machine_type
-      image_uri      = var.cluster_config.master_config.image
-      
+
       disk_config {
         boot_disk_size_gb = var.cluster_config.master_config.disk_config.boot_disk_size_gb
         boot_disk_type    = var.cluster_config.master_config.disk_config.boot_disk_type
@@ -26,7 +34,6 @@ resource "google_dataproc_cluster" "dpc_cluster" {
     worker_config {
       num_instances  = var.cluster_config.worker_config.num_instances
       machine_type   = var.cluster_config.worker_config.machine_type
-      image_uri      = var.cluster_config.worker_config.image
       
       disk_config {
         boot_disk_size_gb = var.cluster_config.worker_config.disk_config.boot_disk_size_gb

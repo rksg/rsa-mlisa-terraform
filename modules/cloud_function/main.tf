@@ -12,11 +12,11 @@ resource "google_cloudfunctions_function" "function" {
   
   trigger_http = var.trigger_http
   
-  vpc_connector = var.vpc_connector != "" ? var.vpc_connector : null
+  vpc_connector = var.vpc_connector != "" ? "projects/${var.project}/locations/${var.region}/connectors/${var.vpc_connector}" : null
   vpc_connector_egress_settings = var.vpc_connector_egress_settings != "" ? var.vpc_connector_egress_settings : null
   
   environment_variables = var.environment_variables
   
   min_instances = var.min_instances
   max_instances = var.max_instances
-} 
+}

@@ -173,7 +173,7 @@ module "cloud_functions" {
     module.network,
     module.subnetworks
   ]
-  for_each = {} #{ for idx, function in var.cloud_functions : function.name => function }
+  for_each = { for idx, function in var.cloud_functions : function.name => function }
   
   # Use values from tfvars.json structure
   project                = var.project
@@ -219,4 +219,53 @@ module "container_clusters" {
   database_encryption       = each.value.database_encryption
   cluster_autoscaling       = each.value.cluster_autoscaling
   node_pools                = each.value.node_pools
+}
+
+# Call the Redis module for each Redis instance
+module "redis_instances" {
+  source = "./modules/redis"
+  depends_on = [
+    module.network
+  ]
+  for_each = { for idx, redis in var.redis_instances : redis.name => redis }
+  
+  # Use values from tfvars.json structure
+  project                    = var.project
+  instance_name              = each.value.name
+  display_name               = each.value.display_name
+  location_id                = "us-central1-c" #var.region
+  redis_version              = each.value.redis_version
+  tier                       = each.value.tier
+  memory_size_gb             = each.value.memory_size_gb
+  authorized_network          = each.value.authorized_network
+  connect_mode               = each.value.connect_mode
+  auth_enabled               = each.value.auth_enabled
+  transit_encryption_mode    = each.value.transit_encryption_mode
+  redis_configs              = each.value.redis_configs
+  replica_count              = each.value.replica_count
+  read_replicas_mode         = each.value.read_replicas_mode
+  persistence_config          = each.value.persistence_config
+}
+
+# Call the PostgreSQL module for each PostgreSQL instance
+module "sql_postgres_instances" {
+  source = "./modules/sql_postgres"
+  depends_on = [
+    module.network
+  ]
+  for_each = { for idx, postgres in var.sql_postgres_instances : postgres.name => postgres }
+  
+  # Use values from tfvars.json structure
+  project                    = var.project
+  instance_name              = each.value.name
+  database_version           = each.value.database_version
+  region                     = var.region
+  machine_type               = each.value.machine_type
+  availability_type          = each.value.availability_type
+  data_disk_size_gb          = each.value.data_disk_size_gb
+  data_disk_type             = each.value.data_disk_type
+  database_flags             = each.value.database_flags
+  backup_configuration       = each.value.backup_configuration
+  ip_configuration           = each.value.ip_configuration
+  databases                  = each.value.databases
 }

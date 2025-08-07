@@ -154,6 +154,9 @@ The wrapper discovers and documents the following GCP resources:
 - Container (GKE) Clusters
 - Firewall Rules
 - Compute Addresses
+- Redis Instances
+- Cloud SQL postgres Instances
+
 
 ## Environment Variables
 

@@ -14,6 +14,8 @@ This script reads properties of various Google Cloud resources:
 - Cloud Container Node Pool
 - Firewall Rules
 - Compute Addresses
+- Redis Instances
+- Cloud SQL PostgreSQL Instances
 
 The script filters resources based on a specific VPC network and subnetwork.
 """
@@ -27,6 +29,7 @@ from google.cloud import compute_v1
 from google.cloud import functions_v1
 from google.cloud import run_v2
 from google.cloud import container_v1
+from google.cloud import redis_v1
 from google.auth import default
 
 
@@ -36,7 +39,7 @@ class GCPResourceReader:
     
     This class provides methods to fetch and filter GCP resources based on
     project ID, network name, and region. It supports reading compute resources,
-    container clusters, cloud functions, and more.
+    container clusters, cloud functions, Redis instances, PostgreSQL instances, and more.
     """
     
     def __init__(self, project_id: Optional[str] = None, 
@@ -78,6 +81,7 @@ class GCPResourceReader:
         self.container_client = container_v1.ClusterManagerClient()
         self.firewalls_client = compute_v1.FirewallsClient()
         self.addresses_client = compute_v1.AddressesClient()
+        self.redis_client = redis_v1.CloudRedisClient()
 
     def _check_project_id_and_network_name(self):
         """
@@ -344,7 +348,7 @@ class GCPResourceReader:
                         'timeout': function['timeout'].rsplit('s', 1)[0],
                         'entry_point': function['entryPoint'],
                         'trigger_http': True,  # Cloud Functions with VPC connector are HTTP triggered
-                        'vpc_connector': f"projects/{self.project_id}/locations/{self.region}/connectors/{self.subnetwork_name}-func",
+                        'vpc_connector': function['vpcConnector'].rsplit('/', 1)[-1],
                         'vpc_connector_egress_settings': "PRIVATE_RANGES_ONLY",
                         'environment_variables': function.get('environmentVariables', {}),
                         'min_instances': function.get('minInstances', 0),
@@ -728,6 +732,138 @@ class GCPResourceReader:
             raise ValueError(f"Error getting VPC Access Connectors: {e}")
         return connectors
 
+    def get_redis_instances(self) -> List[Dict[str, Any]]:
+        """
+        Get Redis instances for the specified network.
+        
+        Returns:
+            List of Redis instance dictionaries
+        """
+        instances = []
+        
+        try:
+            # Use gcloud CLI to get Redis instances since the API client requires location
+            result = subprocess.run([
+                'gcloud', 'redis', 'instances', 'list', 
+                '--region', self.region, '--format=json',
+                '--filter', f'authorizedNetwork : projects/{self.project_id}/global/networks/{self.network_name}'
+            ], capture_output=True, text=True, check=True)
+
+            if result.returncode == 0:
+                for instance in json.loads(result.stdout):
+                    instance_info = {
+                        'name': instance['name'].rsplit('/', 1)[-1],
+                        'display_name': instance.get('displayName', ''),
+                        'redis_version': instance.get('redisVersion', ''),
+                        'tier': instance.get('tier', ''),
+                        'memory_size_gb': instance.get('memorySizeGb', 0),
+                        'port': instance.get('port', 6379),
+                        'authorized_network': instance.get('authorizedNetwork', '').rsplit('/', 1)[-1],
+                        'connect_mode': instance.get('connectMode', ''),
+                        'auth_enabled': instance.get('authEnabled', False),
+                        'transit_encryption_mode': instance.get('transitEncryptionMode', ''),
+                        'redis_configs': instance.get('redisConfigs', {}),
+                        'replica_count': instance.get('replicaCount', 0),
+                        'read_replicas_mode': instance.get('readReplicasMode', ''),
+                        'persistence_config': {
+                            'persistence_mode': instance.get('persistenceConfig', {}).get('persistenceMode', '')
+                        } if instance.get('persistenceConfig') else None
+                    }
+                    instances.append(instance_info)
+        except Exception as e:
+            print(f"Error getting Redis instances: {e}")
+            raise ValueError(f"Error getting Redis instances: {e}")
+        return instances
+
+    def get_sql_databases(self, instance_name: str) -> List[Dict[str, Any]]:
+        """
+        Get databases for a specific SQL instance.
+        
+        Args:
+            instance_name: The name of the SQL instance
+            
+        Returns:
+            List of database dictionaries
+        """
+        databases = []
+        
+        try:
+            # Use gcloud CLI to get databases for the instance
+            result = subprocess.run([
+                'gcloud', 'sql', 'databases', 'list', 
+                '--instance', instance_name,
+                '--format=json'
+            ], capture_output=True, text=True, check=True)
+
+            if result.returncode == 0:
+                for database in json.loads(result.stdout):
+                    if database.get('name') != 'postgres':
+                        databases.append(database.get('name'))
+        except Exception as e:
+            print(f"Error getting databases for instance {instance_name}: {e}")
+            # Don't raise error, just return empty list
+            return []
+        return databases
+
+    def get_sql_postgres_instances(self) -> List[Dict[str, Any]]:
+        """
+        Get Cloud SQL PostgreSQL instances for the specified network.
+        
+        Returns:
+            List of PostgreSQL instance dictionaries with databases
+        """
+        sql_instances = []
+        
+        try:
+            # Use gcloud CLI to get SQL instances
+            result = subprocess.run([
+                'gcloud', 'sql', 'instances', 'list', 
+                '--format=json'
+            ], capture_output=True, text=True, check=True)
+
+            if result.returncode == 0:
+                for instance in json.loads(result.stdout):
+                    # Check if this is a PostgreSQL instance
+                    if instance.get('databaseVersion', '').startswith('POSTGRES'):
+                        # Check if the instance is in the specified network
+                        # SQL instances can be connected to VPC through private services access
+                        # We'll check if the instance has any network configuration that matches our network
+                        network_info = instance.get('settings', {}).get('ipConfiguration', {})
+                        
+                        # Check if the instance has private IP configuration that might be in our network
+                        if network_info.get('privateNetwork'):
+                            private_network = network_info['privateNetwork']
+                            if f"/networks/{self.network_name}" in private_network:
+                                instance_name = instance['name'].rsplit('/', 1)[-1]
+                                
+                                # Get databases for this instance
+                                databases = self.get_sql_databases(instance_name)
+                                
+                                instance_info = {
+                                    'name': instance_name,
+                                    'database_version': instance.get('databaseVersion', ''),
+                                    'instance_type': instance.get('instanceType', ''),
+                                    'machine_type': instance.get('settings', {}).get('tier', ''),
+                                    'database_flags': instance.get('settings', {}).get('databaseFlags', []),
+                                    'backup_configuration': {
+                                        'enabled': instance.get('settings', {}).get('backupConfiguration', {}).get('enabled', False),
+                                        'binary_log_enabled': instance.get('settings', {}).get('backupConfiguration', {}).get('binaryLoggingEnabled', False)
+                                    } if instance.get('settings', {}).get('backupConfiguration') else None,
+                                    'ip_configuration': {
+                                        'ipv4_enabled': instance.get('settings', {}).get('ipConfiguration', {}).get('ipv4Enabled', False),
+                                        'private_network': instance.get('settings', {}).get('ipConfiguration', {}).get('privateNetwork', '').rsplit('/', 1)[-1]
+                                    } if instance.get('settings', {}).get('ipConfiguration') else None,
+                                    'availability_type': instance.get('settings', {}).get('availabilityType', ''),
+                                    'data_disk_size_gb': instance.get('settings', {}).get('dataDiskSizeGb', 0),
+                                    'data_disk_type': instance.get('settings', {}).get('dataDiskType', ''),
+                                    'databases': databases
+                                }
+                                sql_instances.append(instance_info)
+        except Exception as e:
+            print(f"Error getting PostgreSQL instances: {e}")
+            raise ValueError(f"Error getting PostgreSQL instances: {e}")
+        return sql_instances
+
     def get_all_resources(self) -> Dict[str, Any]:
         """
         Get all resources from all resource types in one call.
@@ -750,7 +886,9 @@ class GCPResourceReader:
             'cloud_run_services': [],
             'firewall_rules': [],
             'compute_addresses': [],
-            'vpc_peer_global_addresses': []
+            'vpc_peer_global_addresses': [],
+            'redis_instances': [],
+            'sql_postgres_instances': []
         }
         
         try:
@@ -804,6 +942,16 @@ class GCPResourceReader:
             print("Fetching Container Clusters...")
             all_resources['container_clusters'] = self.get_container_clusters()
             print(f"Found {len(all_resources['container_clusters'])} Container Clusters")
+            
+            # Get Redis Instances
+            print("Fetching Redis Instances...")
+            all_resources['redis_instances'] = self.get_redis_instances()
+            print(f"Found {len(all_resources['redis_instances'])} Redis Instances")
+            
+            # Get PostgreSQL Instances
+            print("Fetching PostgreSQL Instances...")
+            all_resources['sql_postgres_instances'] = self.get_sql_postgres_instances()
+            print(f"Found {len(all_resources['sql_postgres_instances'])} PostgreSQL Instances")
             
             # Get VPC Access Connectors
             #print("Fetching VPC Access Connectors...")

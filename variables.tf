@@ -303,3 +303,53 @@ variable "container_clusters" {
   }))
   default = []
 }
+
+variable "redis_instances" {
+  description = "List of Redis instances"
+  type = list(object({
+    name = string
+    display_name = string
+    redis_version = string
+    tier = string
+    memory_size_gb = number
+    port = number
+    authorized_network = string
+    connect_mode = string
+    auth_enabled = bool
+    transit_encryption_mode = string
+    redis_configs = map(string)
+    replica_count = number
+    read_replicas_mode = string
+    persistence_config = object({
+      persistence_mode = string
+    })
+  }))
+  default = []
+}
+
+variable "sql_postgres_instances" {
+  description = "List of PostgreSQL SQL instances"
+  type = list(object({
+    name = string
+    database_version = string
+    instance_type = string
+    machine_type = string
+    database_flags = list(object({
+      name = string
+      value = string
+    }))
+    backup_configuration = object({
+      enabled = bool
+      binary_log_enabled = bool
+    })
+    ip_configuration = object({
+      private_network = string
+      ipv4_enabled = bool
+    })
+    availability_type = string
+    data_disk_size_gb = string
+    data_disk_type = string
+    databases = list(string)
+  }))
+  default = []
+}

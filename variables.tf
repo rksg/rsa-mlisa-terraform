@@ -353,3 +353,26 @@ variable "sql_postgres_instances" {
   }))
   default = []
 }
+
+variable "gcs_buckets" {
+  description = "List of GCS buckets"
+  type = list(object({
+    name = string
+    location = string
+    location_type = string
+    storage_class = string
+    versioning_enabled = bool
+    uniform_bucket_level_access_enabled = bool
+    public_access_prevention = string
+    lifecycle_rules = list(object({
+      action = object({
+        type = string
+      })
+      condition = object({
+        age = optional(number)
+        matchesPrefix = optional(list(string))
+      })
+    }))
+  }))
+  default = []
+}

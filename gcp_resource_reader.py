@@ -16,6 +16,7 @@ This script reads properties of various Google Cloud resources:
 - Compute Addresses
 - Redis Instances
 - Cloud SQL PostgreSQL Instances
+- GCS Buckets
 
 The script filters resources based on a specific VPC network and subnetwork.
 """
@@ -30,6 +31,7 @@ from google.cloud import functions_v1
 from google.cloud import run_v2
 from google.cloud import container_v1
 from google.cloud import redis_v1
+from google.cloud import storage
 from google.auth import default
 
 
@@ -39,12 +41,13 @@ class GCPResourceReader:
     
     This class provides methods to fetch and filter GCP resources based on
     project ID, network name, and region. It supports reading compute resources,
-    container clusters, cloud functions, Redis instances, PostgreSQL instances, and more.
+    container clusters, cloud functions, Redis instances, PostgreSQL instances, GCS buckets, and more.
     """
     
     def __init__(self, project_id: Optional[str] = None, 
                  network_name: Optional[str] = None, 
-                 region: Optional[str] = None):
+                 region: Optional[str] = None,
+                 mlisa_cluster: Optional[str] = None):
         """
         Initialize the GCP Resource Reader.
         
@@ -56,6 +59,7 @@ class GCPResourceReader:
         self.project_id = project_id
         self.network_name = network_name
         self.region = region
+        self.mlisa_cluster = mlisa_cluster
         self.subnetwork_name = 'default'
         
         # Get default credentials
@@ -82,6 +86,7 @@ class GCPResourceReader:
         self.firewalls_client = compute_v1.FirewallsClient()
         self.addresses_client = compute_v1.AddressesClient()
         self.redis_client = redis_v1.CloudRedisClient()
+        self.storage_client = storage.Client()
 
     def _check_project_id_and_network_name(self):
         """
@@ -864,6 +869,50 @@ class GCPResourceReader:
             raise ValueError(f"Error getting PostgreSQL instances: {e}")
         return sql_instances
 
+    def get_gcs_buckets(self, name_regex: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get GCS buckets with optional name regex filtering.
+        
+        Args:
+            name_regex: Optional regex pattern to filter buckets by name
+            
+        Returns:
+            List of GCS bucket dictionaries
+        """
+        buckets = []
+        
+        try:
+            # List all buckets in the project
+            bucket_list = self.storage_client.list_buckets()
+            
+            for bucket in bucket_list:
+                # Apply regex filtering if specified
+                if name_regex and not re.search(name_regex, bucket.name):
+                    continue
+                
+                # Get bucket details
+                bucket_info = {
+                    'name': bucket.name,
+                    'location': bucket.location,
+                    'location_type': bucket.location_type,
+                    'storage_class': bucket.storage_class,
+                    'versioning_enabled': bucket.versioning_enabled,
+                    'uniform_bucket_level_access_enabled': bucket.iam_configuration.uniform_bucket_level_access_enabled if bucket.iam_configuration else False,
+                    'public_access_prevention': bucket.iam_configuration.public_access_prevention if bucket.iam_configuration else None,
+                    'lifecycle_rules': [
+                        {
+                            'action': rule.get('action', {}),
+                            'condition': rule.get('condition', {})
+                        } for rule in list(bucket.lifecycle_rules)
+                    ] if bucket.lifecycle_rules else []
+                }
+                buckets.append(bucket_info)
+                
+        except Exception as e:
+            print(f"Error getting GCS buckets: {e}")
+            raise ValueError(f"Error getting GCS buckets: {e}")
+        return buckets
+
     def get_all_resources(self) -> Dict[str, Any]:
         """
         Get all resources from all resource types in one call.
@@ -888,7 +937,8 @@ class GCPResourceReader:
             'compute_addresses': [],
             'vpc_peer_global_addresses': [],
             'redis_instances': [],
-            'sql_postgres_instances': []
+            'sql_postgres_instances': [],
+            'gcs_buckets': []
         }
         
         try:
@@ -953,6 +1003,14 @@ class GCPResourceReader:
             all_resources['sql_postgres_instances'] = self.get_sql_postgres_instances()
             print(f"Found {len(all_resources['sql_postgres_instances'])} PostgreSQL Instances")
             
+            # Get GCS Buckets
+            print("Fetching GCS Buckets...")
+            if self.mlisa_cluster == 'rai':
+                all_resources['gcs_buckets'] = self.get_gcs_buckets('^.*-sa-.*-mlisa-gcs-.*')
+            else:
+                all_resources['gcs_buckets'] = self.get_gcs_buckets('^.*alto-.*-mlisa-gcs-.*')
+            print(f"Found {len(all_resources['gcs_buckets'])} GCS Buckets")
+            
             # Get VPC Access Connectors
             #print("Fetching VPC Access Connectors...")
             #all_resources['vpc_access_connectors'] = self.get_vpc_access_connectors()
@@ -994,7 +1052,8 @@ def main():
         reader = GCPResourceReader(
             project_id=config_data[args.environment]['project_id'], 
             network_name=config_data[args.environment][args.cluster]['vpc'],
-            region=config_data[args.environment]['region']
+            region=config_data[args.environment]['region'],
+            mlisa_cluster=args.cluster
         )
         print(f"Connected to project: {reader.project_id}")
             

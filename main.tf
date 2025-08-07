@@ -269,3 +269,22 @@ module "sql_postgres_instances" {
   ip_configuration           = each.value.ip_configuration
   databases                  = each.value.databases
 }
+
+# Call the GCS Bucket module for each bucket
+module "gcs_buckets" {
+  source = "./modules/gcs_bucket"
+  depends_on = [
+    module.network
+  ]
+  for_each = { for idx, bucket in var.gcs_buckets : bucket.name => bucket }
+  
+  # Use values from tfvars.json structure
+  project                           = var.project
+  bucket_name                       = each.value.name
+  location                          = each.value.location
+  storage_class                     = each.value.storage_class
+  versioning_enabled                = each.value.versioning_enabled
+  uniform_bucket_level_access_enabled = each.value.uniform_bucket_level_access_enabled
+  public_access_prevention          = each.value.public_access_prevention
+  lifecycle_rules                   = each.value.lifecycle_rules
+}

@@ -43,7 +43,7 @@ Arguments:
 
 Options:
   --target-site <site>    Target site (primary, dr) [default: primary]
-  --get-gcp-resources-site <site>     Get GCP resources from site (primary, dr, none) to generate tfvars file [default: none]
+  --refresh-gcp-resource-vars    Refresh GCP resource variables by calling generate_gcp_resources with primary site [default: false]
   --auto-approve          Auto-approve changes (for apply and destroy)
   --force                 Force reinitialization (for init)
   --detailed              Show detailed output (for plan)
@@ -51,7 +51,7 @@ Options:
 Examples:
   $0 stg r1-rai init
   $0 prod-us rai plan
-  $0 stg r1-rai init --get-gcp-resources-site primary --target-site dr
+  $0 stg r1-rai init --refresh-gcp-resource-vars --target-site dr
   $0 prod-eu r1-rai apply --auto-approve
   $0 stg rai destroy
   $0 prod-asia r1-rai show
@@ -65,7 +65,7 @@ validate_args() {
     local cluster=$2
     local action=$3
     local target_site=$4    
-    local get_gcp_resources_site=$5
+    local refresh_gcp_resource_vars=$5
     
     # Validate environment
     case $environment in
@@ -111,13 +111,13 @@ validate_args() {
             ;;
     esac
 
-    # Validate get gcp resources
-    case $get_gcp_resources_site in
-        primary|dr|none)
+    # Validate refresh gcp resources
+    case $refresh_gcp_resource_vars in
+        true|false)
             ;;
         *)
-            print_error "Invalid get gcp resources: $get_gcp_resources_site"
-            print_info "Valid get gcp resources site: primary, dr, none"
+            print_error "Invalid refresh gcp resources: $refresh_gcp_resource_vars"
+            print_info "Valid refresh gcp resources: true, false"
             exit 1
             ;;
     esac
@@ -163,7 +163,7 @@ main() {
     
     # Parse options
     local target_site="primary"
-    local get_gcp_resources_site="none"
+    local refresh_gcp_resource_vars="false"
     local auto_approve=""
     local force=""
     local detailed=""
@@ -174,9 +174,9 @@ main() {
                 target_site=$2
                 shift 2
                 ;;
-            --get-gcp-resources-site)
-                get_gcp_resources_site=$2
-                shift 2
+            --refresh-gcp-resource-vars)
+                refresh_gcp_resource_vars="true"
+                shift
                 ;;
             --auto-approve)
                 auto_approve="--auto-approve"
@@ -199,7 +199,7 @@ main() {
     done
     
     # Validate arguments
-    validate_args "$environment" "$cluster" "$action" "$target_site" "$get_gcp_resources_site"
+    validate_args "$environment" "$cluster" "$action" "$target_site" "$refresh_gcp_resource_vars"
     
     # Check prerequisites
     check_python_script
@@ -211,7 +211,10 @@ main() {
     cmd="$cmd --cluster $cluster"
     cmd="$cmd --target-site $target_site"
     cmd="$cmd --action $action"
-    cmd="$cmd --get-gcp-resources-site $get_gcp_resources_site"
+    
+    if [[ "$refresh_gcp_resource_vars" == "true" ]]; then
+        cmd="$cmd --refresh-gcp-resource-vars"
+    fi
     
     if [[ -n $auto_approve ]]; then
         cmd="$cmd $auto_approve"

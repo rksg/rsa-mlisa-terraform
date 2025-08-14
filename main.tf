@@ -1,20 +1,6 @@
-# Call the network module
-module "network" {
-  source = "./modules/network"
-  
-  # Use values from tfvars.json structure
-  project         = var.project
-  compute_network = var.compute_network.name
-  region          = var.region
-  vpc_peer_global_addresses = var.vpc_peer_global_addresses
-}
-
 # Call the subnetwork module for each subnetwork
 module "subnetworks" {
   source = "./modules/subnetwork"
-  depends_on = [
-    module.network
-  ]
   for_each = { for idx, subnet in var.compute_subnetworks : subnet.name => subnet }
   
   # Use values from tfvars.json structure
@@ -22,7 +8,7 @@ module "subnetworks" {
   region                     = var.region
   subnet_name                = each.value.name
   description                = each.value.description
-  subnet_network             = module.network.network_name
+  subnet_network             = var.compute_network.name
   subnet_range_cidr          = each.value.ip_cidr_range
   private_ip_google_access   = each.value.private_ip_google_access
   subnet_secondary_ip_ranges = each.value.secondary_ip_range
@@ -32,7 +18,6 @@ module "subnetworks" {
 module "vpc_connectors" {
   source = "./modules/vpc_connect"
   depends_on = [
-    module.network,
     module.subnetworks
   ]
   for_each = { for idx, connector in var.vpc_access_connectors : connector.name => connector }
@@ -51,7 +36,7 @@ module "nat" {
     for_each = var.nat_routers
 
     # Use values from tfvars.json structure
-    compute_network                     = module.network.network_name
+    compute_network                     = var.compute_network.name
     region                              = var.region
     nat_router_name                     = each.value.name
     nat_name                            = each.value.nat.name
@@ -87,8 +72,8 @@ locals {
 module "dataproc_cluster" {
   source = "./modules/dataproc"
   depends_on = [
-    module.network,
-    module.subnetworks
+    module.subnetworks,
+    module.firewall
   ]
   count  = local.should_create_cluster ? 1 : 0
   
@@ -106,13 +91,11 @@ module "dataproc_cluster" {
 # Call the firewall module for each firewall rule
 module "firewall" {
   source = "./modules/firewall"
-  depends_on = [
-    module.dataproc_cluster
-  ]
   for_each = { for idx, firewall_rule in var.firewall_rules : firewall_rule.name => firewall_rule }
   
   # Use values from tfvars.json structure
   project       = var.project
+  network       = var.compute_network.name
   firewall_rule = each.value
 }
 
@@ -151,7 +134,6 @@ module "cloud_run_services" {
   source = "./modules/cloud_run"
   depends_on = [
     module.vpc_connectors,
-    module.network,
     module.subnetworks
   ]
   for_each = { for idx, service in var.cloud_run_services : service.name => service }
@@ -170,7 +152,6 @@ module "cloud_functions" {
   source = "./modules/cloud_function"
   depends_on = [
     module.vpc_connectors,
-    module.network,
     module.subnetworks
   ]
   for_each = { for idx, function in var.cloud_functions : function.name => function }
@@ -198,7 +179,6 @@ module "container_clusters" {
   source = "./modules/container_cluster"
   depends_on = [
     module.vpc_connectors,
-    module.network,
     module.subnetworks
   ]
   for_each = { for idx, cluster in var.container_clusters : cluster.name => cluster }
@@ -207,7 +187,7 @@ module "container_clusters" {
   project                    = var.project
   region                     = var.region
   cluster_name               = each.value.name
-  network                    = each.value.network
+  network                    = var.compute_network.name
   subnetwork                 = each.value.subnetwork
   default_max_pods_per_node  = each.value.default_max_pods_per_node
   ip_allocation_policy      = each.value.ip_allocation_policy
@@ -224,20 +204,17 @@ module "container_clusters" {
 # Call the Redis module for each Redis instance
 module "redis_instances" {
   source = "./modules/redis"
-  depends_on = [
-    module.network
-  ]
   for_each = { for idx, redis in var.redis_instances : redis.name => redis }
   
   # Use values from tfvars.json structure
   project                    = var.project
   instance_name              = each.value.name
   display_name               = each.value.display_name
-  location_id                = "us-central1-c" #var.region
+  region                     = var.region
   redis_version              = each.value.redis_version
   tier                       = each.value.tier
   memory_size_gb             = each.value.memory_size_gb
-  authorized_network          = each.value.authorized_network
+  authorized_network         = var.compute_network.name
   connect_mode               = each.value.connect_mode
   auth_enabled               = each.value.auth_enabled
   transit_encryption_mode    = each.value.transit_encryption_mode
@@ -250,9 +227,6 @@ module "redis_instances" {
 # Call the PostgreSQL module for each PostgreSQL instance
 module "sql_postgres_instances" {
   source = "./modules/sql_postgres"
-  depends_on = [
-    module.network
-  ]
   for_each = { for idx, postgres in var.sql_postgres_instances : postgres.name => postgres }
   
   # Use values from tfvars.json structure
@@ -260,6 +234,7 @@ module "sql_postgres_instances" {
   instance_name              = each.value.name
   database_version           = each.value.database_version
   region                     = var.region
+  network                    = var.compute_network.name
   machine_type               = each.value.machine_type
   availability_type          = each.value.availability_type
   data_disk_size_gb          = each.value.data_disk_size_gb
@@ -268,23 +243,4 @@ module "sql_postgres_instances" {
   backup_configuration       = each.value.backup_configuration
   ip_configuration           = each.value.ip_configuration
   databases                  = each.value.databases
-}
-
-# Call the GCS Bucket module for each bucket
-module "gcs_buckets" {
-  source = "./modules/gcs_bucket"
-  depends_on = [
-    module.network
-  ]
-  for_each = { for idx, bucket in var.gcs_buckets : bucket.name => bucket }
-  
-  # Use values from tfvars.json structure
-  project                           = var.project
-  bucket_name                       = each.value.name
-  location                          = each.value.location
-  storage_class                     = each.value.storage_class
-  versioning_enabled                = each.value.versioning_enabled
-  uniform_bucket_level_access_enabled = each.value.uniform_bucket_level_access_enabled
-  public_access_prevention          = each.value.public_access_prevention
-  lifecycle_rules                   = each.value.lifecycle_rules
 }

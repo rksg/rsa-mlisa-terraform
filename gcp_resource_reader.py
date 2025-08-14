@@ -1,53 +1,48 @@
-#!/usr/bin/env python3
+
 """
 Google Cloud Resource Properties Reader
 
-This script reads properties of various Google Cloud resources:
-- Compute Network
-- Compute Subnetwork
+This script reads properties of various Google Cloud resources using gcloud CLI:
+- Compute Networks and Subnetworks
+- NAT Routers
+- DataProc Clusters
 - Cloud Functions
-- Cloud Run
-- Cloud VPC Access Connector
-- Compute Instance
-- DataProc Cluster
-- Cloud Container Cluster
-- Cloud Container Node Pool
+- Cloud Run Services
+- Container (GKE) Clusters
 - Firewall Rules
 - Compute Addresses
 - Redis Instances
 - Cloud SQL PostgreSQL Instances
-- GCS Buckets
 
-The script filters resources based on a specific VPC network and subnetwork.
+The script filters resources based on a specific VPC network and generates both primary and DR configurations.
 """
 
 import json
 import subprocess
 import datetime
 import re
+import ipaddress
 from typing import Dict, List, Any, Optional, Tuple
-from google.cloud import compute_v1
-from google.cloud import functions_v1
-from google.cloud import run_v2
-from google.cloud import container_v1
-from google.cloud import redis_v1
-from google.cloud import storage
-from google.auth import default
 
 
 class GCPResourceReader:
     """
-    Class to read properties of various Google Cloud resources.
+    GCP Resource Reader using gcloud CLI for resource discovery.
     
-    This class provides methods to fetch and filter GCP resources based on
-    project ID, network name, and region. It supports reading compute resources,
-    container clusters, cloud functions, Redis instances, PostgreSQL instances, GCS buckets, and more.
+    This class provides methods to fetch and filter GCP resources using gcloud CLI commands,
+    avoiding SSL certificate issues that commonly occur in corporate environments.
+    
+    Features:
+    - Automatic resource discovery for primary and DR sites
+    - IP range management for multi-site deployments
+    - Gateway address calculation for subnetworks
+    - Comprehensive resource filtering and validation
     """
     
     def __init__(self, project_id: Optional[str] = None, 
                  network_name: Optional[str] = None, 
                  region: Optional[str] = None,
-                 mlisa_cluster: Optional[str] = None):
+                 ip_ranges: Optional[str] = None):
         """
         Initialize the GCP Resource Reader.
         
@@ -55,38 +50,19 @@ class GCPResourceReader:
             project_id: Google Cloud project ID. If None, will try to get from environment
             network_name: Name of the VPC network to filter resources
             region: GCP region for regional resources
+            ip_ranges: IP range configuration for primary and DR sites
         """
         self.project_id = project_id
         self.network_name = network_name
         self.region = region
-        self.mlisa_cluster = mlisa_cluster
+        self.ip_ranges = ip_ranges
         self.subnetwork_name = 'default'
-        
-        # Get default credentials
-        self.credentials, _ = default()
         
         # Validate project and network
         self._check_project_id_and_network_name()
-
-        # Initialize GCP API clients
-        self._initialize_clients()
         
-        # Construct network filter for API calls
+        # Construct network filter for gcloud CLI calls
         self.network_filter = f"network = \"https://www.googleapis.com/compute/v1/projects/{self.project_id}/global/networks/{self.network_name}\""
-
-    def _initialize_clients(self):
-        """Initialize all GCP API clients."""
-        self.compute_client = compute_v1.NetworksClient()
-        self.subnetworks_client = compute_v1.SubnetworksClient()
-        self.instances_client = compute_v1.InstancesClient()
-        self.routers_client = compute_v1.RoutersClient()
-        self.functions_client = functions_v1.CloudFunctionsServiceClient()
-        self.run_client = run_v2.ServicesClient()
-        self.container_client = container_v1.ClusterManagerClient()
-        self.firewalls_client = compute_v1.FirewallsClient()
-        self.addresses_client = compute_v1.AddressesClient()
-        self.redis_client = redis_v1.CloudRedisClient()
-        self.storage_client = storage.Client()
 
     def _check_project_id_and_network_name(self):
         """
@@ -125,126 +101,238 @@ class GCPResourceReader:
                 print(f"Error checking network: {e}")
                 raise ValueError(f"Network name '{self.network_name}' not found in project '{self.project_id}'.")
     
-    def get_compute_subnetworks(self) -> List[Dict[str, Any]]:
+    def get_compute_subnetworks(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Get all Compute Subnetworks in the project, separated by type.
+        Discover compute subnetworks for both primary and DR sites.
+        
+        Uses gcloud CLI to fetch subnetworks and creates primary/DR configurations
+        with appropriate IP ranges and gateway addresses.
         
         Returns:
-            List of Compute Subnetwork configurations
+            Tuple of (primary_subnetworks, dr_subnetworks) lists containing:
+            - name: Subnetwork name (DR version gets '-dr' suffix)
+            - description: Subnetwork description
+            - ip_cidr_range: IP range from configuration (primary or DR)
+            - gateway_address: Calculated gateway address
+            - private_ip_google_access: Google access configuration
+            - secondary_ip_range: Secondary IP ranges for GKE pods/services
         """
         subnetworks = []
+        dr_subnetworks = []
         
         try:
-            request = compute_v1.ListSubnetworksRequest(
-                project=self.project_id,
-                region=self.region,
-                filter=self.network_filter
-            )
-            page_result = self.subnetworks_client.list(request=request)
+            # Use gcloud CLI to fetch subnetworks for the specified network
+            result = subprocess.run([
+                'gcloud', 'compute', 'networks', 'subnets', 'list',
+                '--project', self.project_id,
+                '--filter', self.network_filter,
+                '--format', 'json'
+            ], capture_output=True, text=True, check=True)
             
-            for subnetwork in page_result:
-                if subnetwork.secondary_ip_ranges:
-                    self.subnetwork_name = subnetwork.name
-                subnetwork_info = {
-                    'name': subnetwork.name,
-                    'description': subnetwork.description,
-                    'network': subnetwork.network.rsplit('/', 1)[-1],
-                    'ip_cidr_range': subnetwork.ip_cidr_range,
-                    'gateway_address': subnetwork.gateway_address,
-                    'private_ip_google_access': subnetwork.private_ip_google_access,
-                    'secondary_ip_range': [
-                        {
-                            'name': range.range_name,
-                            'ip_cidr_range': range.ip_cidr_range
-                        } for range in subnetwork.secondary_ip_ranges
-                    ] if subnetwork.secondary_ip_ranges else []
-                }
-                subnetworks.append(subnetwork_info)
+            if result.returncode == 0:
+                for subnetwork in json.loads(result.stdout):
+                    # Check if subnetwork has secondary IP ranges (GKE requirement)
+                    if subnetwork.get('secondaryIpRanges'):
+                        self.subnetwork_name = subnetwork['name']
+                        
+                        # Create primary subnetwork configuration
+                        subnetwork_info = {
+                            'name': subnetwork['name'],
+                            'description': subnetwork.get('description', ''),
+                            'ip_cidr_range': self.ip_ranges.get('primary', {}).get('subnet_ip_cidr_range', ''),
+                            'gateway_address': self._get_gateway_address(self.ip_ranges.get('primary', {}).get('subnet_ip_cidr_range', '')),
+                            'private_ip_google_access': subnetwork.get('privateIpGoogleAccess', False),
+                            'secondary_ip_range': [
+                                {
+                                    'name': range['rangeName'],
+                                    'ip_cidr_range': self.ip_ranges.get('primary', {}).get('secondary_ip_range_pod', '') if range['rangeName'].endswith('pod') else self.ip_ranges.get('primary', {}).get('secondary_ip_range_svc', '')
+                                } for range in subnetwork.get('secondaryIpRanges', [])
+                            ]
+                        }
+                        subnetworks.append(subnetwork_info)
+                        
+                        # Create DR subnetwork configuration with '-dr' suffix
+                        dr_subnetwork_info = {
+                            'name': subnetwork['name'] + '-dr',
+                            'description': subnetwork.get('description', ''),
+                            'ip_cidr_range': self.ip_ranges.get('dr', {}).get('subnet_ip_cidr_range', ''),
+                            'gateway_address': self._get_gateway_address(self.ip_ranges.get('dr', {}).get('subnet_ip_cidr_range', '')),
+                            'private_ip_google_access': subnetwork.get('privateIpGoogleAccess', False),
+                            'secondary_ip_range': [
+                                {
+                                    'name': range['rangeName'] + '-dr',
+                                    'ip_cidr_range': self.ip_ranges.get('dr', {}).get('secondary_ip_range_pod', '') if range['rangeName'].endswith('pod') else self.ip_ranges.get('dr', {}).get('secondary_ip_range_svc', '')
+                                } for range in subnetwork.get('secondaryIpRanges', [])
+                            ]
+                        }
+                        dr_subnetworks.append(dr_subnetwork_info)
+                    else:
+                        # Handle subnetworks without secondary IP ranges (VPC connectors, etc.)
+                        subnetwork_info = {
+                            'name': subnetwork['name'],
+                            'description': subnetwork.get('description', ''),
+                            'ip_cidr_range': self.ip_ranges.get('primary', {}).get('vpc_connector_ip_cidr_range', ''),
+                            'gateway_address': self._get_gateway_address(self.ip_ranges.get('primary', {}).get('vpc_connector_ip_cidr_range', '')),
+                            'private_ip_google_access': subnetwork.get('privateIpGoogleAccess', False),
+                            'secondary_ip_range': []
+                        }
+                        subnetworks.append(subnetwork_info)
+                        
+                        # Create DR version for VPC connector subnetworks
+                        dr_subnetwork_info = {
+                            'name': subnetwork['name'] + '-dr',
+                            'description': subnetwork.get('description', ''),
+                            'ip_cidr_range': self.ip_ranges.get('dr', {}).get('vpc_connector_ip_cidr_range', ''),
+                            'gateway_address': self._get_gateway_address(self.ip_ranges.get('dr', {}).get('vpc_connector_ip_cidr_range', '')),
+                            'private_ip_google_access': subnetwork.get('privateIpGoogleAccess', False),
+                            'secondary_ip_range': []
+                        }
+                        dr_subnetworks.append(dr_subnetwork_info)
         except Exception as e:
             print(f"Error getting compute subnetworks: {e}")
             raise ValueError(f"Error getting compute subnetworks: {e}")
             
-        return subnetworks
+        return subnetworks, dr_subnetworks
     
-    def get_nat_routers(self) -> List[Dict[str, Any]]:
+    def _get_gateway_address(self, ip_cidr_range: str) -> str:
         """
-        Get all NAT routers in the project.
+        Calculate the gateway address for a given IP CIDR range.
+        
+        The gateway address is the first usable IP address in the subnet.
+        This is typically used as the default gateway for VMs in the subnet.
+        
+        Examples:
+            - 10.120.46.0/28 → gateway: 10.120.46.1
+            - 10.0.0.0/24 → gateway: 10.0.0.1
+            - 192.168.1.0/26 → gateway: 192.168.1.1
+        
+        Args:
+            ip_cidr_range: The IP CIDR range string (e.g., "10.0.0.0/24")
+            
+        Returns:
+            The gateway address (e.g., "10.0.0.1") or "N/A" if invalid
+            
+        Note:
+            For /32 networks (single IP), returns "N/A" as no gateway is possible.
+        """
+        try:
+            # Parse the IP network
+            network = ipaddress.ip_network(ip_cidr_range, strict=False)
+            
+            # Calculate gateway address (first usable IP)
+            gateway = network.network_address + 1
+            
+            # Validate that the gateway is within the network range
+            if gateway in network:
+                return str(gateway)
+            else:
+                print(f"Warning: Calculated gateway {gateway} is not in network {network}")
+                return "N/A"
+                
+        except ValueError as e:
+            print(f"Invalid IP CIDR range '{ip_cidr_range}': {e}")
+            return "N/A"
+        except Exception as e:
+            print(f"Unexpected error calculating gateway for '{ip_cidr_range}': {e}")
+            return "N/A"
+    
+    def get_nat_routers(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """
+        Discover NAT routers for both primary and DR sites.
+        
+        Uses gcloud CLI to fetch NAT routers and creates primary/DR configurations.
+        DR routers get '-dr' suffix for easy identification and deployment.
         
         Returns:
-            List of NAT router configurations
+            Tuple of (primary_routers, dr_routers) dictionaries containing:
+            - name: Router name (DR version gets '-dr' suffix)
+            - description: Router description
+            - nat: NAT configuration including name, allocation options, and logging
         """
-        routers = {}    
+        routers = {}
+        dr_routers = {}
         
         try:
-            request = compute_v1.ListRoutersRequest(
-                project=self.project_id,
-                region=self.region,
-                filter=self.network_filter
-            )
-            page_result = self.routers_client.list(request=request)
+            # Use gcloud CLI to fetch NAT routers for the specified network
+            result = subprocess.run([
+                'gcloud', 'compute', 'routers', 'list',
+                '--project', self.project_id,
+                '--regions', self.region,
+                '--filter', self.network_filter,
+                '--format', 'json'
+            ], capture_output=True, text=True, check=True)
             
-            for router in page_result:
-                router_info = {
-                    'name': router.name,
-                    'description': router.description,
-                    'network': router.network.rsplit('/', 1)[-1],
-                    'nat':
-                    {
-                        'name': router.nats[0].name,
-                        'nat_ip_allocate_option': router.nats[0].nat_ip_allocate_option.name if hasattr(router.nats[0].nat_ip_allocate_option, 'name') else str(router.nats[0].nat_ip_allocate_option),
-                        'source_subnetwork_ip_ranges_to_nat': router.nats[0].source_subnetwork_ip_ranges_to_nat.name if hasattr(router.nats[0].source_subnetwork_ip_ranges_to_nat, 'name') else str(router.nats[0].source_subnetwork_ip_ranges_to_nat),
-                        'max_ports_per_vm': router.nats[0].max_ports_per_vm,
-                        'log_config': {
-                            'enable': router.nats[0].log_config.enable,
-                            'filter': router.nats[0].log_config.filter.name if hasattr(router.nats[0].log_config.filter, 'name') else str(router.nats[0].log_config.filter)
-                        } if router.nats[0].log_config else None,
-                    }if len(router.nats) > 0 else []
-                }
-                routers[router.name] = router_info
+            if result.returncode == 0:
+                for router in json.loads(result.stdout):
+                    # Create primary NAT router configuration
+                    router_info = {
+                        'name': router['name'],
+                        'description': router.get('description', ''),
+                        'nat': {
+                            'name': router['nats'][0]['name'],
+                            'nat_ip_allocate_option': router['nats'][0].get('natIpAllocateOption', ''),
+                            'source_subnetwork_ip_ranges_to_nat': router['nats'][0].get('sourceSubnetworkIpRangesToNat', ''),
+                            'max_ports_per_vm': router['nats'][0].get('maxPortsPerVm', 0),
+                            'log_config': {
+                                'enable': router['nats'][0].get('logConfig', {}).get('enable', False),
+                                'filter': router['nats'][0].get('logConfig', {}).get('filter', '')
+                            } if router['nats'][0].get('logConfig') else None,
+                        } if router.get('nats') else []
+                    }
+                    routers[router['name']] = router_info
+                    
+                    # Create DR NAT router configuration with '-dr' suffix
+                    dr_router_info = {
+                        'name': router['name'] + '-dr',
+                        'description': router.get('description', ''),
+                        'nat': {
+                            'name': router['nats'][0]['name'] + '-dr',
+                            'nat_ip_allocate_option': router['nats'][0].get('natIpAllocateOption', ''),
+                            'source_subnetwork_ip_ranges_to_nat': router['nats'][0].get('sourceSubnetworkIpRangesToNat', ''),
+                            'max_ports_per_vm': router['nats'][0].get('maxPortsPerVm', 0),
+                            'log_config': {
+                                'enable': router['nats'][0].get('logConfig', {}).get('enable', False),
+                                'filter': router['nats'][0].get('logConfig', {}).get('filter', '')
+                            } if router['nats'][0].get('logConfig') else None,
+                        } if router.get('nats') else []
+                    }
+                    dr_routers[router['name'] + '-dr'] = dr_router_info
                 
         except Exception as e:
             print(f"Error getting NAT routers: {e}")
             raise ValueError(f"Error getting NAT routers: {e}")
-        return routers
+        return routers, dr_routers
 
-    def _extract_dataproc_labels(self, labels_data) -> Dict[str, str]:
-        """
-        Extract and filter labels from DataProc cluster configuration.
-        Handles different label formats and filters out unwanted labels.
-        
-        Args:
-            labels_data: Labels data from cluster config (can be list or dict)
-            
+    def _extract_dataproc_labels(self) -> Dict[str, str]:
+        """ 
         Returns:
-            Dictionary of filtered labels
+            Dictionary of fixed labels
         """
-        labels = {}
-        
-        if not labels_data:
-            return labels
-            
-        if isinstance(labels_data, list):
-            # Labels as list of objects with key/value
-            for label in labels_data:
-                if isinstance(label, dict) and 'key' in label and 'value' in label:
-                    if label['key'] != 'goog-dataproc-cluster-uuid':
-                        labels[label['key']] = label['value']
-        elif isinstance(labels_data, dict):
-            # Labels as direct key-value dictionary
-            labels = {k: v for k, v in labels_data.items() if k != 'goog-dataproc-cluster-uuid'}
-        else:
-            print(f"Unexpected labels format: {type(labels_data)}")
-            
+        labels = {
+            "application": "druid",
+            "product": "mlisa"
+        }
         return labels
 
-    def get_dataproc_clusters(self) -> Dict[str, Any]:
+    def get_dataproc_clusters(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
-        Get the first DataProc cluster in the project that uses the specified subnetwork.
+        Discover DataProc clusters for both primary and DR sites.
+        
+        Uses gcloud CLI to fetch DataProc clusters and creates primary/DR configurations.
+        DR clusters get '-dr' suffix for easy identification and deployment.
         
         Returns:
-            Dictionary containing the first DataProc cluster configuration or empty dict if none found
+            Tuple of (primary_cluster, dr_cluster) dictionaries containing:
+            - cluster_name: Cluster name (DR version gets '-dr' suffix)
+            - labels: Cluster labels (filtered)
+            - cluster_config: Complete cluster configuration including:
+              - gce_cluster_config: GCE-specific configuration
+              - master_config: Master node configuration
+              - worker_config: Worker node configuration
+              - software_config: Software and properties configuration
         """
-        cluster_info = {}
+        primary_cluster = {}
+        dr_cluster = {}
         
         try:
             result = subprocess.run([
@@ -257,9 +345,10 @@ class GCPResourceReader:
                     # Filter clusters by subnetwork
                     cluster_subnetwork = cluster['config']['gceClusterConfig']['subnetworkUri'].rsplit('/', 1)[-1]
                     if cluster_subnetwork == self.subnetwork_name:
-                        cluster_info = {
+                        # Create primary DataProc cluster configuration
+                        primary_cluster = {
                             'cluster_name': cluster['clusterName'],
-                            'labels': self._extract_dataproc_labels(cluster['labels']),
+                            'labels': self._extract_dataproc_labels(),
                             'cluster_config': {
                                 'gce_cluster_config': {
                                     'internal_ip_only': cluster['config']['gceClusterConfig'].get('internalIpOnly'),
@@ -271,12 +360,28 @@ class GCPResourceReader:
                                 'software_config': self._extract_software_config(cluster['config'].get('softwareConfig'))
                             }
                         }
+                        
+                        # Create DR DataProc cluster configuration with '-dr' suffix
+                        dr_cluster = {
+                            'cluster_name': cluster['clusterName'] + '-dr',
+                            'labels': self._extract_dataproc_labels(),
+                            'cluster_config': {
+                                'gce_cluster_config': {
+                                    'internal_ip_only': cluster['config']['gceClusterConfig'].get('internalIpOnly'),
+                                    'subnetwork': cluster_subnetwork + '-dr',  # DR subnetwork gets '-dr' suffix
+                                    'tags': [cluster['config']['gceClusterConfig'].get('tags')[0] + '-dr'] if cluster['config'].get('gceClusterConfig').get('tags') else None
+                                } if cluster['config'].get('gceClusterConfig') else None,
+                                'master_config': self._extract_dataproc_node_config(cluster['config'].get('masterConfig')),
+                                'worker_config': self._extract_dataproc_node_config(cluster['config'].get('workerConfig')),
+                                'software_config': self._extract_software_config(cluster['config'].get('softwareConfig'))
+                            }
+                        }
                         # Return only the first cluster found
                         break
         except Exception as e:
             print(f"Error getting DataProc clusters: {e}")
             raise ValueError(f"Error getting DataProc clusters: {e}")
-        return cluster_info
+        return primary_cluster, dr_cluster
 
     def _extract_dataproc_node_config(self, node_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -327,14 +432,31 @@ class GCPResourceReader:
             } if properties else None,
         }
     
-    def get_cloudfunctions(self) -> List[Dict[str, Any]]:
+    def get_cloudfunctions(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Get all Cloud Functions in the project that use the VPC connector.
+        Discover Cloud Functions for both primary and DR sites.
+        
+        Uses gcloud CLI to fetch Cloud Functions and creates primary/DR configurations.
+        DR functions get '-dr' suffix for easy identification and deployment.
         
         Returns:
-            List of Cloud Function configurations
+            Tuple of (primary_functions, dr_functions) lists containing:
+            - name: Function name (DR version gets '-dr' suffix)
+            - runtime: Function runtime environment
+            - available_memory_mb: Memory allocation
+            - source_archive_bucket: Source code bucket
+            - source_archive_object: Source code object path
+            - timeout: Function timeout
+            - entry_point: Function entry point
+            - trigger_http: HTTP trigger configuration
+            - vpc_connector: VPC connector (DR version gets '-dr' suffix)
+            - vpc_connector_egress_settings: Egress settings
+            - environment_variables: Function environment variables
+            - min_instances: Minimum instance count
+            - max_instances: Maximum instance count
         """
-        functions = []
+        primary_functions = []
+        dr_functions = []
         vpc_connector_filter = f"vpcConnector = \"projects/{self.project_id}/locations/{self.region}/connectors/{self.subnetwork_name}-func\""
         
         try:
@@ -344,7 +466,8 @@ class GCPResourceReader:
             
             if result.returncode == 0:
                 for function in json.loads(result.stdout):
-                    function_info = {
+                    # Create primary Cloud Function configuration
+                    primary_function_info = {
                         'name': function['name'].rsplit('/', 1)[-1],
                         'runtime': function['runtime'],
                         'available_memory_mb': function['availableMemoryMb'],
@@ -359,20 +482,47 @@ class GCPResourceReader:
                         'min_instances': function.get('minInstances', 0),
                         'max_instances': function.get('maxInstances', 0)
                     }
-                    functions.append(function_info)
+                    primary_functions.append(primary_function_info)
+                    
+                    # Create DR Cloud Function configuration with '-dr' suffix
+                    dr_function_info = {
+                        'name': function['name'].rsplit('/', 1)[-1] + '-dr',
+                        'runtime': function['runtime'],
+                        'available_memory_mb': function['availableMemoryMb'],
+                        'source_archive_bucket': function['sourceArchiveUrl'].rsplit('/')[2],
+                        'source_archive_object': "/".join(function['sourceArchiveUrl'].rsplit('/')[3:]),
+                        'timeout': function['timeout'].rsplit('s', 1)[0],
+                        'entry_point': function['entryPoint'],
+                        'trigger_http': True,  # Cloud Functions with VPC connector are HTTP triggered
+                        'vpc_connector': function['vpcConnector'].rsplit('/', 1)[-1] + '-dr',
+                        'vpc_connector_egress_settings': "PRIVATE_RANGES_ONLY",
+                        'environment_variables': function.get('environmentVariables', {}),
+                        'min_instances': function.get('minInstances', 0),
+                        'max_instances': function.get('maxInstances', 0)
+                    }
+                    dr_functions.append(dr_function_info)
         except Exception as e:
             print(f"Error getting Cloud Functions: {e}")
             raise ValueError(f"Error getting Cloud Functions: {e}")
-        return functions
+        return primary_functions, dr_functions
     
-    def get_cloudrun(self) -> List[Dict[str, Any]]:
+    def get_cloudrun(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Get all Cloud Run services in the project that use the VPC connector.
+        Discover Cloud Run services for both primary and DR sites.
+        
+        Uses gcloud CLI to fetch Cloud Run services and creates primary/DR configurations.
+        DR services get '-dr' suffix for easy identification and deployment.
         
         Returns:
-            List of Cloud Run service configurations
+            Tuple of (primary_services, dr_services) lists containing:
+            - name: Service name (DR version gets '-dr' suffix)
+            - template: Service template configuration including:
+              - metadata: Annotations and metadata
+              - spec: Service specification with containers, timeout, concurrency
+            - traffic: Traffic routing configuration
         """
-        services = []
+        primary_services = []
+        dr_services = []
         
         try:
             result = subprocess.run([
@@ -386,11 +536,17 @@ class GCPResourceReader:
                     vpc_connector = annotations.get('run.googleapis.com/vpc-access-connector')
                     
                     if vpc_connector == f'{self.subnetwork_name}-func':
-                        service_info = {
+                        # Create primary Cloud Run service configuration
+                        primary_service_info = {
                             'name': service['metadata']['name'],
                             'template': {
                                 'metadata': {
-                                    'annotations': annotations
+                                    'annotations': {
+                                        'autoscaling.knative.dev/maxScale': '1000',
+                                        'run.googleapis.com/client-name': 'terraform',
+                                        'run.googleapis.com/vpc-access-connector': f'{self.subnetwork_name}-func',
+                                        'run.googleapis.com/vpc-access-egress': 'private-ranges-only'
+                                    }
                                 },
                                 'spec': {
                                     'timeout_seconds': service['spec']['template']['spec'].get('timeoutSeconds'),
@@ -409,11 +565,42 @@ class GCPResourceReader:
                             },
                             'traffic': service['spec']['traffic']
                         }
-                        services.append(service_info)
+                        primary_services.append(primary_service_info)
+                        
+                        # Create DR Cloud Run service configuration with '-dr' suffix
+                        dr_service_info = {
+                            'name': service['metadata']['name'] + '-dr',
+                            'template': {
+                                'metadata': {
+                                    'annotations': {
+                                        'autoscaling.knative.dev/maxScale': '1000',
+                                        'run.googleapis.com/client-name': 'terraform',
+                                        'run.googleapis.com/vpc-access-connector': f'{self.subnetwork_name}-func-dr',
+                                        'run.googleapis.com/vpc-access-egress': 'private-ranges-only'
+                                    }
+                                },
+                                'spec': {
+                                    'timeout_seconds': service['spec']['template']['spec'].get('timeoutSeconds'),
+                                    'container_concurrency': service['spec']['template']['spec'].get('containerConcurrency'),
+                                    'containers': [
+                                        {
+                                            'image': container['image'],
+                                            'command': container.get('command'),
+                                            'args': container.get('args'),
+                                            'env': self._extract_container_env(container.get('env', [])),
+                                            'resources': container.get('resources'),
+                                            'ports': container.get('ports')
+                                        } for container in service['spec']['template']['spec'].get('containers', [])
+                                    ]
+                                }
+                            },
+                            'traffic': service['spec']['traffic']
+                        }
+                        dr_services.append(dr_service_info)
         except Exception as e:
             print(f"Error getting Cloud Run services: {e}")
             raise ValueError(f"Error getting Cloud Run services: {e}")
-        return services
+        return primary_services, dr_services
 
     def _extract_container_env(self, env_data) -> List[Dict[str, str]]:
         """
@@ -437,14 +624,30 @@ class GCPResourceReader:
                     })
         return env_list
     
-    def get_container_clusters(self) -> List[Dict[str, Any]]:
+    def get_container_clusters(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Get all GKE clusters in the project that use the specified subnetwork.
+        Discover GKE container clusters for both primary and DR sites.
+        
+        Uses gcloud CLI to fetch GKE clusters and creates primary/DR configurations.
+        DR clusters get '-dr' suffix for easy identification and deployment.
         
         Returns:
-            List of GKE cluster configurations
+            Tuple of (primary_clusters, dr_clusters) lists containing:
+            - name: Cluster name (DR version gets '-dr' suffix)
+            - subnetwork: Associated subnetwork name (DR version gets '-dr' suffix)
+            - default_max_pods_per_node: Maximum pods per node constraint
+            - ip_allocation_policy: IP allocation policy configuration
+            - logging_service: Logging service configuration
+            - monitoring_service: Monitoring service configuration
+            - release_channel: Release channel configuration
+            - private_cluster_config: Private cluster configuration
+            - addons_config: Addons configuration
+            - database_encryption: Database encryption configuration
+            - cluster_autoscaling: Cluster autoscaling configuration
+            - node_pools: Node pool configurations
         """
-        clusters = []
+        primary_clusters = []
+        dr_clusters = []
         
         try:
             result = subprocess.run([
@@ -454,12 +657,12 @@ class GCPResourceReader:
             
             if result.returncode == 0:
                 for cluster in json.loads(result.stdout):
-                    cluster_info = {
+                    # Create primary GKE cluster configuration
+                    primary_cluster_info = {
                         'name': cluster['name'],
-                        'network': cluster['network'],
                         'subnetwork': cluster['subnetwork'],
                         'default_max_pods_per_node': cluster['defaultMaxPodsConstraint']['maxPodsPerNode'],
-                        'ip_allocation_policy': self._extract_ip_allocation_policy(cluster.get('ipAllocationPolicy')),
+                        'ip_allocation_policy': self._extract_ip_allocation_policy(cluster.get('ipAllocationPolicy'),False),
                         'logging_service': cluster['loggingService'],
                         'monitoring_service': cluster['monitoringService'],
                         'release_channel': {
@@ -467,35 +670,68 @@ class GCPResourceReader:
                         } if cluster.get('releaseChannel') else {
                             'channel': 'UNSPECIFIED'
                         },
-                        'private_cluster_config': self._extract_private_cluster_config(cluster.get('privateClusterConfig')),
+                        'private_cluster_config': self._extract_private_cluster_config(cluster.get('privateClusterConfig'),False),
                         'addons_config': self._extract_addons_config(cluster.get('addonsConfig')),
                         'database_encryption': self._extract_database_encryption(cluster.get('databaseEncryption')),
                         'cluster_autoscaling': self._extract_cluster_autoscaling(cluster.get('autoscaling')),
-                        'node_pools': self._extract_node_pools(cluster.get('nodePools', []))
+                        'node_pools': self._extract_node_pools(cluster.get('nodePools', []),False)
                     }
-                    clusters.append(cluster_info)
+                    primary_clusters.append(primary_cluster_info)
+                    
+                    # Create DR GKE cluster configuration with '-dr' suffix
+                    dr_cluster_info = {
+                        'name': cluster['name'] + '-dr',
+                        'subnetwork': cluster['subnetwork'] + '-dr',  # DR subnetwork gets '-dr' suffix
+                        'default_max_pods_per_node': cluster['defaultMaxPodsConstraint']['maxPodsPerNode'],
+                        'ip_allocation_policy': self._extract_ip_allocation_policy(cluster.get('ipAllocationPolicy'),True),
+                        'logging_service': cluster['loggingService'],
+                        'monitoring_service': cluster['monitoringService'],
+                        'release_channel': {
+                            'channel': cluster.get('releaseChannel').get('channel')
+                        } if cluster.get('releaseChannel') else {
+                            'channel': 'UNSPECIFIED'
+                        },
+                        'private_cluster_config': self._extract_private_cluster_config(cluster.get('privateClusterConfig'),True),
+                        'addons_config': self._extract_addons_config(cluster.get('addonsConfig')),
+                        'database_encryption': self._extract_database_encryption(cluster.get('databaseEncryption')),
+                        'cluster_autoscaling': self._extract_cluster_autoscaling(cluster.get('autoscaling')),
+                        'node_pools': self._extract_node_pools(cluster.get('nodePools', []),True)
+                    }
+                    dr_clusters.append(dr_cluster_info)
         except Exception as e:
             print(f"Error getting container clusters: {e}")
             raise ValueError(f"Error getting container clusters: {e}")
-        return clusters
+        return primary_clusters, dr_clusters
 
-    def _extract_ip_allocation_policy(self, policy: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _extract_ip_allocation_policy(self, policy: Optional[Dict[str, Any]], is_dr: bool) -> Optional[Dict[str, Any]]:
         """Extract IP allocation policy from cluster config."""
         if not policy:
             return None
-        return {
-            'cluster_secondary_range_name': policy.get('clusterSecondaryRangeName'),
-            'services_secondary_range_name': policy.get('servicesSecondaryRangeName')
+        if is_dr:
+            return {
+                'cluster_secondary_range_name': policy.get('clusterSecondaryRangeName') + '-dr',
+                'services_secondary_range_name': policy.get('servicesSecondaryRangeName') + '-dr'
+            }
+        else:
+            return {    
+                'cluster_secondary_range_name': policy.get('clusterSecondaryRangeName'),
+                'services_secondary_range_name': policy.get('servicesSecondaryRangeName')
         }
 
-    def _extract_private_cluster_config(self, config: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _extract_private_cluster_config(self, config: Optional[Dict[str, Any]], is_dr: bool) -> Optional[Dict[str, Any]]:
         """Extract private cluster configuration."""
         if not config:
             return None
-        return {
-            'enable_private_nodes': config.get('enablePrivateNodes'),
-            'master_ipv4_cidr_block': config.get('masterIpv4CidrBlock')
-        }
+        if is_dr:
+            return {
+                'enable_private_nodes': config.get('enablePrivateNodes'),
+                'master_ipv4_cidr_block': self.ip_ranges.get('dr', {}).get('gke_master_ip_cidr_range', '')
+            }
+        else:
+            return {
+                'enable_private_nodes': config.get('enablePrivateNodes'),
+                'master_ipv4_cidr_block': self.ip_ranges.get('primary', {}).get('gke_master_ip_cidr_range', '')
+            }
 
     def _extract_addons_config(self, config: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Extract addons configuration."""
@@ -532,12 +768,12 @@ class GCPResourceReader:
             'autoscaling_profile': config.get('autoscalingProfile')
         }
 
-    def _extract_node_pools(self, node_pools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _extract_node_pools(self, node_pools: List[Dict[str, Any]], is_dr: bool) -> List[Dict[str, Any]]:
         """Extract node pool configurations."""
         extracted_pools = []
         for node_pool in node_pools:
             pool_info = {
-                'name': node_pool['name'],
+                'name': node_pool['name'] + '-dr' if is_dr else node_pool['name'],
                 'initial_node_count': node_pool.get('initialNodeCount') if node_pool.get('initialNodeCount') else 1,
                 'autoscaling': {
                     'enabled': node_pool.get('autoscaling', {}).get('enabled'),
@@ -572,134 +808,185 @@ class GCPResourceReader:
             extracted_pools.append(pool_info)
         return extracted_pools
 
-    def get_firewall_rules(self, name_regex: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_firewall_rules(self, name_regex: Optional[str] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Get firewall rules for the specified network with optional name regex filtering.
+        Discover firewall rules for both primary and DR sites.
+        
+        Uses gcloud CLI to fetch firewall rules and creates primary/DR configurations.
+        DR rules get '-dr' suffix for easy identification and deployment.
+        Supports filtering by name pattern (e.g., '^dpc.*-allow-.*' for DPC rules).
         
         Args:
             name_regex: Optional regex pattern to filter firewall rules by name
             
         Returns:
-            List of firewall rule dictionaries
+            Tuple of (primary_rules, dr_rules) lists containing:
+            - name: Firewall rule name (DR version gets '-dr' suffix)
+            - description: Rule description
+            - priority: Rule priority (lower = higher priority)
+            - direction: Traffic direction (INGRESS/EGRESS)
+            - disabled: Whether rule is disabled
+            - source_ranges: Source IP ranges
+            - destination_ranges: Destination IP ranges
+            - allowed/denied: Protocol and port configurations
         """
-        firewall_rules = []
+        primary_rules = []
+        dr_rules = []
         
         try:
-            request = compute_v1.ListFirewallsRequest(
-                project=self.project_id,
-                filter=self.network_filter
-            )
-            page_result = self.firewalls_client.list(request=request)
+            # Use gcloud CLI instead of API client to avoid SSL issues
+            result = subprocess.run([
+                'gcloud', 'compute', 'firewall-rules', 'list',
+                '--project', self.project_id,
+                '--filter', f'network="{self.network_name}"',
+                '--format', 'json'
+            ], capture_output=True, text=True, check=True)
             
-            for firewall in page_result:
-                # Apply regex filtering if specified
-                if name_regex and not re.search(name_regex, firewall.name):
-                    continue
+            if result.returncode == 0:
+                for firewall in json.loads(result.stdout):
+                    # Apply regex filtering if specified
+                    if name_regex and not re.search(name_regex, firewall['name']):
+                        continue
+                        
+                    # Create primary firewall rule configuration
+                    primary_firewall_info = {
+                        'name': firewall['name'],
+                        'description': firewall.get('description', ''),
+                        'priority': firewall.get('priority', 0),
+                        'direction': firewall.get('direction', ''),
+                        'disabled': firewall.get('disabled', False),
+                        'source_ranges': self._get_source_ranges(firewall['name'],False),
+                        'destination_ranges': firewall.get('destinationRanges', []),
+                        'source_tags': firewall.get('sourceTags', []),
+                        'target_tags': [firewall.get('targetTags')[0]],
+                        'source_service_accounts': firewall.get('sourceServiceAccounts', []),
+                        'target_service_accounts': firewall.get('targetServiceAccounts', []),
+                        'allowed': [
+                            {
+                                'ip_protocol': rule.get('IPProtocol', ''),
+                                'ports': rule.get('ports', [])
+                            } for rule in firewall.get('allowed', [])
+                        ],
+                        'denied': [
+                            {
+                                'ip_protocol': rule.get('IPProtocol', ''),
+                                'ports': rule.get('ports', [])
+                            } for rule in firewall.get('denied', [])
+                        ]
+                    }
+                    primary_rules.append(primary_firewall_info)
                     
-                firewall_info = {
-                    'name': firewall.name,
-                    'description': firewall.description,
-                    'network': firewall.network.rsplit('/', 1)[-1],
-                    'priority': firewall.priority,
-                    'direction': firewall.direction.name if hasattr(firewall.direction, 'name') else str(firewall.direction),
-                    'disabled': firewall.disabled,
-                    'source_ranges': list(firewall.source_ranges) if firewall.source_ranges else [],
-                    'destination_ranges': list(firewall.destination_ranges) if firewall.destination_ranges else [],
-                    'source_tags': list(firewall.source_tags) if firewall.source_tags else [],
-                    'target_tags': list(firewall.target_tags) if firewall.target_tags else [],
-                    'source_service_accounts': list(firewall.source_service_accounts) if firewall.source_service_accounts else [],
-                    'target_service_accounts': list(firewall.target_service_accounts) if firewall.target_service_accounts else [],
-                    'allowed': [
-                        {
-                            'ip_protocol': rule.I_p_protocol,
-                            'ports': list(rule.ports) if rule.ports else []
-                        } for rule in firewall.allowed
-                    ] if firewall.allowed else [],
-                    'denied': [
-                        {
-                            'ip_protocol': rule.I_p_protocol,
-                            'ports': list(rule.ports) if rule.ports else []
-                        } for rule in firewall.denied
-                    ] if firewall.denied else []
-                }
-                firewall_rules.append(firewall_info)
+                    # Create DR firewall rule configuration with '-dr' suffix
+                    dr_firewall_info = {
+                        'name': firewall['name'] + '-dr',
+                        'description': firewall.get('description', ''),
+                        'priority': firewall.get('priority', 0),
+                        'direction': firewall.get('direction', ''),
+                        'disabled': firewall.get('disabled', False),
+                        'source_ranges': self._get_source_ranges(firewall['name'],True),
+                        'destination_ranges': firewall.get('destinationRanges', []),
+                        'source_tags': firewall.get('sourceTags', []),
+                        'target_tags': [firewall.get('targetTags')[0] + '-dr'],
+                        'source_service_accounts': firewall.get('sourceServiceAccounts', []),
+                        'target_service_accounts': firewall.get('targetServiceAccounts', []),
+                        'allowed': [
+                            {
+                                'ip_protocol': rule.get('IPProtocol', ''),
+                                'ports': rule.get('ports', [])
+                            } for rule in firewall.get('allowed', [])
+                        ],
+                        'denied': [
+                            {
+                                'ip_protocol': rule.get('IPProtocol', ''),
+                                'ports': rule.get('ports', [])
+                            } for rule in firewall.get('denied', [])
+                        ]
+                    }
+                    dr_rules.append(dr_firewall_info)
                 
         except Exception as e:
             print(f"Error getting firewall rules: {e}")
             raise ValueError(f"Error getting firewall rules: {e}")
-        return firewall_rules
+        return primary_rules, dr_rules
 
-    def get_compute_addresses(self) -> List[Dict[str, Any]]:
+    def _get_source_ranges(self, name: str, is_dr: bool) -> List[str]:
+        """Get source ranges for a firewall rule."""
+        if 'allow-gke' in name:
+            if is_dr:
+                return [self.ip_ranges.get('dr', {}).get('subnet_ip_cidr_range'), self.ip_ranges.get('dr', {}).get('secondary_ip_range_pod'), self.ip_ranges.get('dr', {}).get('secondary_ip_range_svc')]
+            else:
+                return [self.ip_ranges.get('primary', {}).get('subnet_ip_cidr_range'), self.ip_ranges.get('primary', {}).get('secondary_ip_range_pod'), self.ip_ranges.get('primary', {}).get('secondary_ip_range_svc')]
+        elif 'allow-vms' in name:
+            if is_dr:
+                return [self.ip_ranges.get('dr', {}).get('subnet_ip_cidr_range')]
+            else:
+                return [self.ip_ranges.get('primary', {}).get('subnet_ip_cidr_range')]
+        else:
+            return []
+
+    def get_compute_addresses(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Get compute addresses for the specified subnetwork.
+        Discover compute addresses for both primary and DR sites.
+        
+        Uses gcloud CLI to fetch compute addresses and creates primary/DR configurations.
+        DR addresses get '-dr' suffix for easy identification and deployment.
+        Addresses are typically used for load balancers, VPN gateways, and other
+        network services requiring static IP addresses.
         
         Returns:
-            List of compute address dictionaries
+            Tuple of (primary_addresses, dr_addresses) lists containing:
+            - name: Address name (DR version gets '-dr' suffix)
+            - description: Address description
+            - address_type: Type (INTERNAL/EXTERNAL)
+            - subnetwork: Associated subnetwork name (DR version gets '-dr' suffix)
+            - purpose: Address purpose (GCE_ENDPOINT, SHARED_LOADBALANCER_VIP, etc.)
+            - ip_version: IP version (IPV4/IPV6)
+            - network_tier: Network tier (PREMIUM/STANDARD)
         """
-        addresses = []
+        primary_addresses = []
+        dr_addresses = []
         
+        subnetwork_filter = f"subnetwork = \"https://www.googleapis.com/compute/v1/projects/{self.project_id}/regions/{self.region}/subnetworks/{self.subnetwork_name}\""
         try:
-            # Build filter for subnetwork
-            subnetwork_filter = f"subnetwork = \"https://www.googleapis.com/compute/v1/projects/{self.project_id}/regions/{self.region}/subnetworks/{self.subnetwork_name}\""
-            
-            request = compute_v1.ListAddressesRequest(
-                project=self.project_id,
-                region=self.region,
-                filter=subnetwork_filter
-            )
-            page_result = self.addresses_client.list(request=request)
-            
-            for address in page_result:
-                address_info = {
-                    'name': address.name,
-                    'description': address.description,
-                    'address_type': address.address_type.name if hasattr(address.address_type, 'name') else str(address.address_type),
-                    'subnetwork': address.subnetwork.rsplit('/', 1)[-1],
-                    'network_tier': address.network_tier.name if hasattr(address.network_tier, 'name') else str(address.network_tier),
-                    'purpose': address.purpose.name if hasattr(address.purpose, 'name') else str(address.purpose),
-                    'ip_version': address.ip_version.name if hasattr(address.ip_version, 'name') else str(address.ip_version)
-                }
-                addresses.append(address_info)
-                
-        except Exception as e:
-            print(f"Error getting compute addresses: {e}")
-            raise ValueError(f"Error getting compute addresses: {e}")   
-        return addresses
-
-    def get_global_compute_addresses(self) -> List[Dict[str, Any]]:
-        """
-        Get global compute addresses for the specified network.
-        
-        Returns:
-            List of global compute address dictionaries
-        """
-        addresses = []
-        
-        try:
-            # Use gcloud CLI to get global addresses since the API client doesn't have the method
+            # Use gcloud CLI instead of API client to avoid SSL issues
             result = subprocess.run([
-                'gcloud', 'compute', 'addresses', 'list', 
-                '--global', '--format=json',
-                '--filter', f'network="{self.network_name}" AND purpose="VPC_PEERING"'
+                'gcloud', 'compute', 'addresses', 'list',
+                '--project', self.project_id,
+                '--regions', self.region,
+                '--filter', subnetwork_filter,
+                '--format', 'json'
             ], capture_output=True, text=True, check=True)
             
             if result.returncode == 0:
                 for address in json.loads(result.stdout):
-                    address_info = {
+                    # Create primary compute address configuration
+                    primary_address_info = {
                         'name': address['name'],
                         'description': address.get('description', ''),
                         'address_type': address.get('addressType', ''),
-                        'address': address.get('address', ''),
                         'purpose': address.get('purpose', ''),
-                        'prefix_length': address.get('prefixLength'),
-                        'network': address.get('network', '').rsplit('/', 1)[-1] if address.get('network') else None
+                        'ip_version': address.get('ipVersion'),
+                        'network_tier': address.get('networkTier'),
+                        'subnetwork': address.get('subnetwork', '').rsplit('/', 1)[-1] if address.get('subnetwork') else None
                     }
-                    addresses.append(address_info)
+                    primary_addresses.append(primary_address_info)
                     
+                    # Create DR compute address configuration with '-dr' suffix
+                    dr_address_info = {
+                        'name': address['name'] + '-dr',
+                        'description': address.get('description', ''),
+                        'address_type': address.get('addressType', ''),
+                        'purpose': address.get('purpose', ''),
+                        'ip_version': address.get('ipVersion'),
+                        'network_tier': address.get('networkTier'),
+                        'subnetwork': address.get('subnetwork', '').rsplit('/', 1)[-1] + '-dr' if address.get('subnetwork') else None
+                    }
+                    dr_addresses.append(dr_address_info)
+                
         except Exception as e:
-            print(f"Error getting global compute addresses: {e}")
-            raise ValueError(f"Error getting global compute addresses: {e}")   
-        return addresses
+            print(f"Error getting compute addresses: {e}")
+            raise ValueError(f"Error getting compute addresses: {e}")   
+        return primary_addresses, dr_addresses
 
     def get_vpc_access_connectors(self) -> List[Dict[str, Any]]:
         """
@@ -737,14 +1024,31 @@ class GCPResourceReader:
             raise ValueError(f"Error getting VPC Access Connectors: {e}")
         return connectors
 
-    def get_redis_instances(self) -> List[Dict[str, Any]]:
+    def get_redis_instances(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Get Redis instances for the specified network.
+        Discover Redis instances for both primary and DR sites.
+        
+        Uses gcloud CLI to fetch Redis instances and creates primary/DR configurations.
+        DR instances get '-dr' suffix for easy identification and deployment.
         
         Returns:
-            List of Redis instance dictionaries
+            Tuple of (primary_instances, dr_instances) lists containing:
+            - name: Instance name (DR version gets '-dr' suffix)
+            - display_name: Display name
+            - redis_version: Redis version
+            - tier: Instance tier
+            - memory_size_gb: Memory size in GB
+            - port: Redis port
+            - connect_mode: Connection mode
+            - auth_enabled: Authentication enabled flag
+            - transit_encryption_mode: Transit encryption mode
+            - redis_configs: Redis configuration
+            - replica_count: Number of replicas
+            - read_replicas_mode: Read replicas mode
+            - persistence_config: Persistence configuration
         """
-        instances = []
+        primary_instances = []
+        dr_instances = []
         
         try:
             # Use gcloud CLI to get Redis instances since the API client requires location
@@ -756,14 +1060,14 @@ class GCPResourceReader:
 
             if result.returncode == 0:
                 for instance in json.loads(result.stdout):
-                    instance_info = {
+                    # Create primary Redis instance configuration
+                    primary_instance_info = {
                         'name': instance['name'].rsplit('/', 1)[-1],
                         'display_name': instance.get('displayName', ''),
                         'redis_version': instance.get('redisVersion', ''),
                         'tier': instance.get('tier', ''),
                         'memory_size_gb': instance.get('memorySizeGb', 0),
                         'port': instance.get('port', 6379),
-                        'authorized_network': instance.get('authorizedNetwork', '').rsplit('/', 1)[-1],
                         'connect_mode': instance.get('connectMode', ''),
                         'auth_enabled': instance.get('authEnabled', False),
                         'transit_encryption_mode': instance.get('transitEncryptionMode', ''),
@@ -774,11 +1078,31 @@ class GCPResourceReader:
                             'persistence_mode': instance.get('persistenceConfig', {}).get('persistenceMode', '')
                         } if instance.get('persistenceConfig') else None
                     }
-                    instances.append(instance_info)
+                    primary_instances.append(primary_instance_info)
+                    
+                    # Create DR Redis instance configuration with '-dr' suffix
+                    dr_instance_info = {
+                        'name': instance['name'].rsplit('/', 1)[-1] + '-dr',
+                        'display_name': instance.get('displayName', '') + '-dr',
+                        'redis_version': instance.get('redisVersion', ''),
+                        'tier': instance.get('tier', ''),
+                        'memory_size_gb': instance.get('memorySizeGb', 0),
+                        'port': instance.get('port', 6379),
+                        'connect_mode': instance.get('connectMode', ''),
+                        'auth_enabled': instance.get('authEnabled', False),
+                        'transit_encryption_mode': instance.get('transitEncryptionMode', ''),
+                        'redis_configs': instance.get('redisConfigs', {}),
+                        'replica_count': instance.get('replicaCount', 0),
+                        'read_replicas_mode': instance.get('readReplicasMode', ''),
+                        'persistence_config': {
+                            'persistence_mode': instance.get('persistenceConfig', {}).get('persistenceMode', '')
+                        } if instance.get('persistenceConfig') else None
+                    }
+                    dr_instances.append(dr_instance_info)
         except Exception as e:
             print(f"Error getting Redis instances: {e}")
             raise ValueError(f"Error getting Redis instances: {e}")
-        return instances
+        return primary_instances, dr_instances
 
     def get_sql_databases(self, instance_name: str) -> List[Dict[str, Any]]:
         """
@@ -810,14 +1134,29 @@ class GCPResourceReader:
             return []
         return databases
 
-    def get_sql_postgres_instances(self) -> List[Dict[str, Any]]:
+    def get_sql_postgres_instances(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Get Cloud SQL PostgreSQL instances for the specified network.
+        Discover Cloud SQL PostgreSQL instances for both primary and DR sites.
+        
+        Uses gcloud CLI to fetch PostgreSQL instances and creates primary/DR configurations.
+        DR instances get '-dr' suffix for easy identification and deployment.
         
         Returns:
-            List of PostgreSQL instance dictionaries with databases
+            Tuple of (primary_instances, dr_instances) lists containing:
+            - name: Instance name (DR version gets '-dr' suffix)
+            - database_version: PostgreSQL version
+            - instance_type: Instance type
+            - machine_type: Machine type/tier
+            - database_flags: Database flags configuration
+            - backup_configuration: Backup configuration
+            - ip_configuration: IP configuration (DR private network gets '-dr' suffix)
+            - availability_type: Availability type
+            - data_disk_size_gb: Data disk size
+            - data_disk_type: Data disk type
+            - databases: List of databases
         """
-        sql_instances = []
+        primary_instances = []
+        dr_instances = []
         
         try:
             # Use gcloud CLI to get SQL instances
@@ -844,7 +1183,8 @@ class GCPResourceReader:
                                 # Get databases for this instance
                                 databases = self.get_sql_databases(instance_name)
                                 
-                                instance_info = {
+                                # Create primary PostgreSQL instance configuration
+                                primary_instance_info = {
                                     'name': instance_name,
                                     'database_version': instance.get('databaseVersion', ''),
                                     'instance_type': instance.get('instanceType', ''),
@@ -855,70 +1195,60 @@ class GCPResourceReader:
                                         'binary_log_enabled': instance.get('settings', {}).get('backupConfiguration', {}).get('binaryLoggingEnabled', False)
                                     } if instance.get('settings', {}).get('backupConfiguration') else None,
                                     'ip_configuration': {
-                                        'ipv4_enabled': instance.get('settings', {}).get('ipConfiguration', {}).get('ipv4Enabled', False),
-                                        'private_network': instance.get('settings', {}).get('ipConfiguration', {}).get('privateNetwork', '').rsplit('/', 1)[-1]
+                                        'ipv4_enabled': instance.get('settings', {}).get('ipConfiguration', {}).get('ipv4Enabled', False)
                                     } if instance.get('settings', {}).get('ipConfiguration') else None,
                                     'availability_type': instance.get('settings', {}).get('availabilityType', ''),
                                     'data_disk_size_gb': instance.get('settings', {}).get('dataDiskSizeGb', 0),
                                     'data_disk_type': instance.get('settings', {}).get('dataDiskType', ''),
                                     'databases': databases
                                 }
-                                sql_instances.append(instance_info)
+                                primary_instances.append(primary_instance_info)
+                                
+                                # Create DR PostgreSQL instance configuration with '-dr' suffix
+                                dr_instance_info = {
+                                    'name': instance_name + '-dr',
+                                    'database_version': instance.get('databaseVersion', ''),
+                                    'instance_type': instance.get('instanceType', ''),
+                                    'machine_type': instance.get('settings', {}).get('tier', ''),
+                                    'database_flags': instance.get('settings', {}).get('databaseFlags', []),
+                                    'backup_configuration': {
+                                        'enabled': instance.get('settings', {}).get('backupConfiguration', {}).get('enabled', False),
+                                        'binary_log_enabled': instance.get('settings', {}).get('backupConfiguration', {}).get('binaryLoggingEnabled', False)
+                                    } if instance.get('settings', {}).get('backupConfiguration') else None,
+                                    'ip_configuration': {
+                                        'ipv4_enabled': instance.get('settings', {}).get('ipConfiguration', {}).get('ipv4Enabled', False)
+                                    } if instance.get('settings', {}).get('ipConfiguration') else None,
+                                    'availability_type': instance.get('settings', {}).get('availabilityType', ''),
+                                    'data_disk_size_gb': instance.get('settings', {}).get('dataDiskSizeGb', 0),
+                                    'data_disk_type': instance.get('settings', {}).get('dataDiskType', ''),
+                                    'databases': databases
+                                }
+                                dr_instances.append(dr_instance_info)
         except Exception as e:
             print(f"Error getting PostgreSQL instances: {e}")
             raise ValueError(f"Error getting PostgreSQL instances: {e}")
-        return sql_instances
+        return primary_instances, dr_instances
 
-    def get_gcs_buckets(self, name_regex: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_all_resources(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
-        Get GCS buckets with optional name regex filtering.
+        Discover all GCP resources for both primary and DR sites.
         
-        Args:
-            name_regex: Optional regex pattern to filter buckets by name
-            
-        Returns:
-            List of GCS bucket dictionaries
-        """
-        buckets = []
-        
-        try:
-            # List all buckets in the project
-            bucket_list = self.storage_client.list_buckets()
-            
-            for bucket in bucket_list:
-                # Apply regex filtering if specified
-                if name_regex and not re.search(name_regex, bucket.name):
-                    continue
-                
-                # Get bucket details
-                bucket_info = {
-                    'name': bucket.name,
-                    'location': bucket.location,
-                    'location_type': bucket.location_type,
-                    'storage_class': bucket.storage_class,
-                    'versioning_enabled': bucket.versioning_enabled,
-                    'uniform_bucket_level_access_enabled': bucket.iam_configuration.uniform_bucket_level_access_enabled if bucket.iam_configuration else False,
-                    'public_access_prevention': bucket.iam_configuration.public_access_prevention if bucket.iam_configuration else None,
-                    'lifecycle_rules': [
-                        {
-                            'action': rule.get('action', {}),
-                            'condition': rule.get('condition', {})
-                        } for rule in list(bucket.lifecycle_rules)
-                    ] if bucket.lifecycle_rules else []
-                }
-                buckets.append(bucket_info)
-                
-        except Exception as e:
-            print(f"Error getting GCS buckets: {e}")
-            raise ValueError(f"Error getting GCS buckets: {e}")
-        return buckets
-
-    def get_all_resources(self) -> Dict[str, Any]:
-        """
-        Get all resources from all resource types in one call.
+        Orchestrates the discovery of all resource types and creates comprehensive
+        configurations for both primary and disaster recovery deployments.
         
         Returns:
-            Dictionary containing all resources organized by type
+            Tuple of (primary_resources, dr_resources) dictionaries containing:
+            - compute_network: VPC network configuration
+            - compute_subnetworks: Subnetwork configurations with IP ranges
+            - nat_routers: NAT router configurations
+            - dataproc_cluster: DataProc cluster details
+            - container_clusters: GKE cluster configurations
+            - cloud_functions: Cloud Functions configurations
+            - cloud_run_services: Cloud Run service configurations
+            - firewall_rules: Firewall rule configurations
+            - compute_addresses: Static IP address configurations
+            - redis_instances: Redis cache configurations
+            - sql_postgres_instances: Cloud SQL PostgreSQL configurations
         """
         print(f"Fetching all GCP resources for project: {self.project_id}")
         
@@ -935,83 +1265,87 @@ class GCPResourceReader:
             'cloud_run_services': [],
             'firewall_rules': [],
             'compute_addresses': [],
-            'vpc_peer_global_addresses': [],
             'redis_instances': [],
-            'sql_postgres_instances': [],
-            'gcs_buckets': []
+            'sql_postgres_instances': []
+        }
+
+        all_resources_dr = {
+            'timestamp': datetime.datetime.now().isoformat(),
+            'compute_network': {},
+            'compute_subnetworks': [],
+            'nat_routers': [],
+            'vpc_access_connectors': [],
+            'dataproc_cluster': {},
+            'container_clusters': [],
+            'cloud_functions': [],
+            'cloud_run_services': [],
+            'firewall_rules': [],
+            'compute_addresses': [],
+            'redis_instances': [],
+            'sql_postgres_instances': []
         }
         
         try:
-            # Add Compute Network
+            # Initialize compute network configuration for both sites
             print("Added Compute Network: ", self.network_name)
             all_resources['compute_network'] = {
                 'name': self.network_name
             }
+            all_resources_dr['compute_network'] = {
+                'name': self.network_name
+            }
             
-            # Get Compute Subnetworks
+            # Discover subnetworks for both primary and DR sites
             print("Fetching Compute Subnetworks...")
-            all_resources['compute_subnetworks'] = self.get_compute_subnetworks()
+            all_resources['compute_subnetworks'], all_resources_dr['compute_subnetworks'] = self.get_compute_subnetworks()
             print(f"Found {len(all_resources['compute_subnetworks'])} Compute Subnetworks")
             
-            # Get NAT Routers
+            # Discover NAT routers for both primary and DR sites
             print("Fetching NAT Routers...")
-            all_resources['nat_routers'] = self.get_nat_routers()
+            all_resources['nat_routers'], all_resources_dr['nat_routers'] = self.get_nat_routers()
             print(f"Found {len(all_resources['nat_routers'])} NAT Routers")
             
-            # Get DataProc Clusters
+            # Discover DataProc cluster configuration for both primary and DR sites
             print("Fetching DataProc Clusters...")
-            all_resources['dataproc_cluster'] = self.get_dataproc_clusters()
-            print(f"Found {len(all_resources['dataproc_cluster'])} DataProc Cluster")
+            all_resources['dataproc_cluster'], all_resources_dr['dataproc_cluster'] = self.get_dataproc_clusters()
+            print(f"Found 1 DataProc Cluster")
             
-            # Get Cloud Functions
+            # Discover Cloud Functions for both primary and DR sites
             print("Fetching Cloud Functions...")
-            all_resources['cloud_functions'] = self.get_cloudfunctions()
+            all_resources['cloud_functions'], all_resources_dr['cloud_functions'] = self.get_cloudfunctions()
             print(f"Found {len(all_resources['cloud_functions'])} Cloud Functions")
 
-            # Get Cloud Run Services
+            # Discover Cloud Run services for both primary and DR sites
             print("Fetching Cloud Run Services...")
-            all_resources['cloud_run_services'] = self.get_cloudrun()
+            all_resources['cloud_run_services'], all_resources_dr['cloud_run_services'] = self.get_cloudrun()
             print(f"Found {len(all_resources['cloud_run_services'])} Cloud Run Services")
             
-            # Get Firewall Rules (filtered by DPC pattern)
+            # Discover firewall rules for both primary and DR sites (filtered by DPC pattern)
             print("Fetching Firewall Rules...")
-            all_resources['firewall_rules'] = self.get_firewall_rules('^dpc.*-allow-.*')
+            all_resources['firewall_rules'], all_resources_dr['firewall_rules'] = self.get_firewall_rules('^dpc.*-allow-.*')
             print(f"Found {len(all_resources['firewall_rules'])} Firewall Rules")
             
-            # Get Compute Addresses
+            # Discover compute addresses for both primary and DR sites
             print("Fetching Compute Addresses...")
-            all_resources['compute_addresses'] = self.get_compute_addresses()
+            all_resources['compute_addresses'], all_resources_dr['compute_addresses'] = self.get_compute_addresses()
             print(f"Found {len(all_resources['compute_addresses'])} Compute Addresses")
             
-            # Get Global Compute Addresses
-            print("Fetching Global Compute Addresses...")
-            all_resources['vpc_peer_global_addresses'] = self.get_global_compute_addresses()
-            print(f"Found {len(all_resources['vpc_peer_global_addresses'])} Global Compute Addresses")
-            
-            # Get Container Clusters
+            # Discover GKE container clusters for both primary and DR sites
             print("Fetching Container Clusters...")
-            all_resources['container_clusters'] = self.get_container_clusters()
+            all_resources['container_clusters'], all_resources_dr['container_clusters'] = self.get_container_clusters()
             print(f"Found {len(all_resources['container_clusters'])} Container Clusters")
             
-            # Get Redis Instances
+            # Discover Redis cache instances for both primary and DR sites
             print("Fetching Redis Instances...")
-            all_resources['redis_instances'] = self.get_redis_instances()
+            all_resources['redis_instances'], all_resources_dr['redis_instances'] = self.get_redis_instances()
             print(f"Found {len(all_resources['redis_instances'])} Redis Instances")
             
-            # Get PostgreSQL Instances
+            # Discover Cloud SQL PostgreSQL instances for both primary and DR sites
             print("Fetching PostgreSQL Instances...")
-            all_resources['sql_postgres_instances'] = self.get_sql_postgres_instances()
+            all_resources['sql_postgres_instances'], all_resources_dr['sql_postgres_instances'] = self.get_sql_postgres_instances()
             print(f"Found {len(all_resources['sql_postgres_instances'])} PostgreSQL Instances")
             
-            # Get GCS Buckets
-            print("Fetching GCS Buckets...")
-            if self.mlisa_cluster == 'rai':
-                all_resources['gcs_buckets'] = self.get_gcs_buckets('^.*-sa-.*-mlisa-gcs-.*')
-            else:
-                all_resources['gcs_buckets'] = self.get_gcs_buckets('^.*alto-.*-mlisa-gcs-.*')
-            print(f"Found {len(all_resources['gcs_buckets'])} GCS Buckets")
-            
-            # Get VPC Access Connectors
+            # Note: VPC Access Connectors are commented out for now
             #print("Fetching VPC Access Connectors...")
             #all_resources['vpc_access_connectors'] = self.get_vpc_access_connectors()
             #print(f"Found {len(all_resources['vpc_access_connectors'])} VPC Access Connectors")
@@ -1019,14 +1353,23 @@ class GCPResourceReader:
         except Exception as e:
             print(f"Error fetching all resources: {e}")
             raise ValueError(f"Error fetching all resources: {e}")
-        return all_resources
+        return all_resources, all_resources_dr
 
 
 def main():
     """
-    Main function to demonstrate usage of GCPResourceReader.
+    Main function for GCP resource discovery and tfvars generation.
     
-    Parses command line arguments and generates resource reports for specified environments.
+    Parses command line arguments and generates comprehensive resource reports
+    for specified environments and clusters. Creates both primary and DR
+    configuration files for multi-site deployments.
+    
+    Usage:
+        python3 gcp_resource_reader.py --environment stg --cluster r1-rai
+        
+    Output:
+        - Primary: ./configs/{environment}/{cluster}.tfvars.json
+        - DR: ./configs/{environment}/{cluster}-dr.tfvars.json
     """
     import argparse
     import sys
@@ -1053,18 +1396,24 @@ def main():
             project_id=config_data[args.environment]['project_id'], 
             network_name=config_data[args.environment][args.cluster]['vpc'],
             region=config_data[args.environment]['region'],
-            mlisa_cluster=args.cluster
+            ip_ranges=config_data[args.environment][args.cluster]['ip_ranges'] 
         )
         print(f"Connected to project: {reader.project_id}")
             
         # Get all resources
-        resources = reader.get_all_resources()
+        resources, resources_dr = reader.get_all_resources()
         
-        # Save results to JSON file
+        # Save primary resources to JSON file
         output_filename = f'./configs/{args.environment}/{args.cluster}.tfvars.json'
         with open(output_filename, 'w') as f:
             json.dump(resources, f, indent=2)
-        print(f"Results saved to: {output_filename}")
+        print(f"Primary resources saved to: {output_filename}")
+        
+        # Save DR resources to JSON file
+        output_filename_dr = f'./configs/{args.environment}/{args.cluster}-dr.tfvars.json'
+        with open(output_filename_dr, 'w') as f:
+            json.dump(resources_dr, f, indent=2)
+        print(f"DR resources saved to: {output_filename_dr}")
             
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

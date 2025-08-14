@@ -8,6 +8,12 @@ variable "region" {
   type        = string
 }
 
+variable "target_site" {
+  description = "Target site value will be dr or empty in case of primary site"
+  type        = string
+  default     = ""
+}
+
 variable "compute_network" {
   description = "Compute network configuration"
   type = object({
@@ -20,7 +26,6 @@ variable "nat_routers" {
   type = map(object({
     name        = string
     description = string
-    network     = string
     nat         = object({
       name                               = string
       nat_ip_allocate_option             = string
@@ -41,7 +46,6 @@ variable "compute_subnetworks" {
     {
       name                      = string
       description               = string
-      network                   = string
       ip_cidr_range             = string
       gateway_address           = string
       private_ip_google_access  = bool
@@ -65,20 +69,6 @@ variable "vpc_access_connectors" {
     subnet        = object({
       name  = string
     })
-  }))
-  default = []
-}
-
-variable "vpc_peer_global_addresses" {
-  description = "List of VPC peer global addresses"
-  type = list(object({
-    name          = string
-    description   = string
-    network       = string
-    address_type  = string
-    address       = string
-    prefix_length = number
-    purpose       = string
   }))
   default = []
 }
@@ -129,7 +119,6 @@ variable "firewall_rules" {
   type = list(object({
     name                      = string
     description               = string
-    network                   = string
     priority                  = number
     direction                 = string
     disabled                  = bool
@@ -229,7 +218,6 @@ variable "container_clusters" {
   description = "List of GKE container clusters"
   type = list(object({
     name = string
-    network = string
     subnetwork = string
     default_max_pods_per_node = string
     ip_allocation_policy = object({
@@ -313,7 +301,6 @@ variable "redis_instances" {
     tier = string
     memory_size_gb = number
     port = number
-    authorized_network = string
     connect_mode = string
     auth_enabled = bool
     transit_encryption_mode = string
@@ -343,36 +330,12 @@ variable "sql_postgres_instances" {
       binary_log_enabled = bool
     })
     ip_configuration = object({
-      private_network = string
       ipv4_enabled = bool
     })
     availability_type = string
     data_disk_size_gb = string
     data_disk_type = string
     databases = list(string)
-  }))
-  default = []
-}
-
-variable "gcs_buckets" {
-  description = "List of GCS buckets"
-  type = list(object({
-    name = string
-    location = string
-    location_type = string
-    storage_class = string
-    versioning_enabled = bool
-    uniform_bucket_level_access_enabled = bool
-    public_access_prevention = string
-    lifecycle_rules = list(object({
-      action = object({
-        type = string
-      })
-      condition = object({
-        age = optional(number)
-        matchesPrefix = optional(list(string))
-      })
-    }))
   }))
   default = []
 }

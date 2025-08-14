@@ -31,7 +31,7 @@ resource "google_sql_database_instance" "postgres" {
     dynamic "ip_configuration" {
       for_each = var.ip_configuration != null ? [var.ip_configuration] : []
       content {
-        private_network = "projects/${var.project}/global/networks/${ip_configuration.value.private_network}"
+        private_network = "projects/${var.project}/global/networks/${var.network}"
         ipv4_enabled =ip_configuration.value.ipv4_enabled
       }
     }

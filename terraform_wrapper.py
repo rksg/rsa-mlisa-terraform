@@ -2,13 +2,16 @@
 """
 Terraform Workspace Wrapper
 
-This script provides a wrapper around Terraform operations with workspace management.
-It supports:
-- Creating/switching to Terraform workspaces
-- Running terraform init, plan, and apply
-- Environment and cluster-specific configurations
-- Interactive mode for user confirmation
+A comprehensive Python wrapper for managing Terraform workspaces and operations across multiple environments and clusters.
+Supports primary and disaster recovery (DR) site deployments with automatic GCP resource discovery and configuration generation.
+
+Key Features:
+- Automated Terraform workspace management
+- Multi-environment and cluster support (stg, prod-us, prod-eu, prod-asia)
+- Primary/DR site deployment support
 - GCP resource discovery and tfvars generation
+- Interactive user confirmation for destructive operations
+- Comprehensive error handling and logging
 """
 
 import json
@@ -16,17 +19,16 @@ import os
 import sys
 import subprocess
 import argparse
-import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 from enum import Enum
 
-# Import the GCP resource reader
+# Import the GCP resource reader for automatic resource discovery
 from gcp_resource_reader import GCPResourceReader
 
 
 class TerraformAction(Enum):
-    """Enumeration of available Terraform actions."""
+    """Available Terraform operations."""
     INIT = "init"
     PLAN = "plan"
     APPLY = "apply"
@@ -37,82 +39,84 @@ class TerraformAction(Enum):
 
 class TerraformWrapper:
     """
-    Wrapper class for Terraform operations with workspace management.
+    Terraform workspace wrapper with comprehensive environment and DR site support.
     
-    This class provides methods to manage Terraform workspaces and execute
-    Terraform commands with proper error handling and user interaction.
+    Manages Terraform workspaces, executes Terraform commands, and optionally generates
+    GCP resource configurations for both primary and disaster recovery sites.
     """
     
-    def __init__(self, environment: str, cluster: str, target_site: str = "primary", get_gcp_resources_site: str = "none"):
+    def __init__(self, environment: str, cluster: str, target_site: str = "primary", 
+                 refresh_gcp_resource_vars: bool = False):
         """
         Initialize the Terraform wrapper.
         
         Args:
-            environment: The environment (stg, prod-us, prod-eu, prod-asia)
-            cluster: The cluster type (rai, r1-rai)
-            target_site: The target site (primary, dr)
-            get_gcp_resources: Whether to get GCP resources to generate tfvars file
+            environment: Target environment (stg, prod-us, prod-eu, prod-asia)
+            cluster: Cluster type (rai, r1-rai)
+            target_site: Deployment target (primary or dr)
+            refresh_gcp_resource_vars: Whether to refresh GCP resource variables
         """
         self.environment = environment
         self.cluster = cluster
         self.target_site = target_site
-        self.get_gcp_resources_site = get_gcp_resources_site
+        self.refresh_gcp_resource_vars = refresh_gcp_resource_vars
         self.workspace_name = f"{environment}-{cluster}-{target_site}"
         
-        # Set up paths
+        # Initialize file paths
         self.root_dir = Path(__file__).parent
         self.config_dir = self.root_dir / "configs"
         self.config_file = self.config_dir / "config.json"
-        self.tfvars_file = self.config_dir / environment / f"{cluster}.tfvars.json"
-        
-        # Load configuration
+        self.tfvars_file_primary = self.config_dir / environment / f"{cluster}.tfvars.json"
+        self.tfvars_file_dr = self.config_dir / environment / f"{cluster}-dr.tfvars.json"
+        self.tfvars_file = self.tfvars_file_primary if self.target_site == "primary" else self.tfvars_file_dr
+
+        # Load and validate configuration
         self.config = self._load_config()
-        
-        # Validate configuration
         self._validate_config()
         
-        # Generate GCP resources and tfvars file if requested
-        if self.get_gcp_resources_site != "none":
-            self._generate_gcp_resources(self.get_gcp_resources_site)
-        else:
-            pass
+        # Generate GCP resources if requested
+        if self.refresh_gcp_resource_vars:
+            self._generate_gcp_resources()
         
-        # Set environment variables for Terraform
+        # Set Terraform environment variables
         self._set_environment_variables()
     
-    def _generate_gcp_resources(self, site: str):
-        """Generate GCP resources and create tfvars file."""
+    def _generate_gcp_resources(self):
+        """
+        Generate GCP resource configurations and create tfvars files.
+        
+        Discovers GCP resources using the GCPResourceReader and generates both
+        primary and DR site configurations with appropriate IP ranges.
+        """
         try:
-            print(f"Generating GCP resources for {self.environment}-{self.cluster}...")
+            print(f"🔍 Generating GCP resources for {self.environment}-{self.cluster}...")
             
             # Load configuration for GCP resource reader
             with open(self.config_file, 'r') as f:
                 config_data = json.load(f)
             
-            # Create GCP resource reader
-            if site == "primary":
-                reader = GCPResourceReader(
-                    project_id=config_data[self.environment]['project_id'],
-                    network_name=config_data[self.environment][self.cluster]['vpc'],
-                    region=config_data[self.environment]['region']
-                )
-            elif site == "dr":
-                reader = GCPResourceReader(
-                    project_id=config_data[self.environment]['dr_project_id'],
-                    network_name=config_data[self.environment][self.cluster]['vpc'],
-                    region=config_data[self.environment]['dr_region']
-                )
+            # Initialize GCP resource reader with project and network configuration
+            reader = GCPResourceReader(
+                project_id=config_data[self.environment]['project_id'],
+                network_name=config_data[self.environment][self.cluster]['vpc'],
+                region=config_data[self.environment]['region'],
+                ip_ranges=config_data[self.environment][self.cluster]['ip_ranges']
+            )
             
-            # Get all resources
-            resources = reader.get_all_resources()
+            # Discover all GCP resources for both primary and DR sites
+            resources, resources_dr = reader.get_all_resources()
             
-            
-            # Save results to JSON file
-            output_filename = self.tfvars_file
-            with open(output_filename, 'w') as f:
+            # Save primary site configuration
+            with open(self.tfvars_file_primary, 'w') as f:
                 json.dump(resources, f, indent=2)
             
-            print(f"✅ GCP resources saved to: {output_filename}")
+            # Save DR site configuration
+            with open(self.tfvars_file_dr, 'w') as f:
+                json.dump(resources_dr, f, indent=2)
+            
+            print(f"✅ GCP resources generated successfully")
+            print(f"   Primary: {self.tfvars_file_primary}")
+            print(f"   DR Site: {self.tfvars_file_dr}")
             
         except Exception as e:
             print(f"⚠️  Warning: Failed to generate GCP resources: {e}")
@@ -129,7 +133,7 @@ class TerraformWrapper:
             raise ValueError(f"Invalid JSON in configuration file: {e}")
     
     def _validate_config(self):
-        """Validate that the environment and cluster exist in configuration."""
+        """Validate environment and cluster configuration."""
         if self.environment not in self.config:
             raise ValueError(f"Environment '{self.environment}' not found in configuration")
         
@@ -138,33 +142,29 @@ class TerraformWrapper:
             raise ValueError(f"Cluster '{self.cluster}' not found in environment '{self.environment}'")
         
         # Only validate tfvars file exists if we're not generating it
-        if not self.get_gcp_resources_site and not self.tfvars_file.exists():
+        if not self.refresh_gcp_resource_vars and not self.tfvars_file.exists():
             raise FileNotFoundError(f"Terraform variables file not found: {self.tfvars_file}")
     
     def _set_environment_variables(self):
-        """Set environment variables for Terraform."""
+        """Set Terraform environment variables based on configuration."""
         env_config = self.config[self.environment]
         
-        # Set project and region based on target site
-        if self.target_site == "dr":
-            os.environ["TF_VAR_project"] = env_config.get("dr_project_id", env_config["project_id"])
-            os.environ["TF_VAR_region"] = env_config.get("dr_region", env_config["region"])
-        else:
-            os.environ["TF_VAR_project"] = env_config["project_id"]
-            os.environ["TF_VAR_region"] = env_config["region"]
-        
-        # Set other common variables
+        # Set common environment variables
+        os.environ["TF_VAR_project"] = env_config["project_id"]
         os.environ["TF_VAR_environment"] = self.environment
         os.environ["TF_VAR_cluster"] = self.cluster
         os.environ["TF_VAR_target_site"] = self.target_site
+
+        # Set region based on deployment target
+        os.environ["TF_VAR_region"] = env_config["dr_region"] if self.target_site == "dr" else env_config["region"]
     
     def _run_command(self, command: List[str], capture_output: bool = True) -> Tuple[int, str, str]:
         """
-        Run a command and return the result.
+        Execute a shell command and return the result.
         
         Args:
-            command: List of command arguments
-            capture_output: Whether to capture output
+            command: Command arguments as a list
+            capture_output: Whether to capture command output
             
         Returns:
             Tuple of (return_code, stdout, stderr)
@@ -183,10 +183,10 @@ class TerraformWrapper:
             return 1, "", str(e)
     
     def _check_terraform_installed(self) -> bool:
-        """Check if Terraform is installed and available."""
+        """Verify Terraform is installed and accessible."""
         return_code, _, stderr = self._run_command(["terraform", "--version"])
         if return_code != 0:
-            print(f"Error: Terraform not found or not accessible: {stderr}")
+            print(f"❌ Error: Terraform not found or not accessible: {stderr}")
             return False
         return True
     
@@ -194,14 +194,14 @@ class TerraformWrapper:
         """Get list of existing Terraform workspaces."""
         return_code, stdout, stderr = self._run_command(["terraform", "workspace", "list"])
         if return_code != 0:
-            print(f"Error getting workspace list: {stderr}")
+            print(f"❌ Error getting workspace list: {stderr}")
             return []
         
-        # Parse workspace list (format: * workspace_name or workspace_name)
+        # Parse workspace list output (format: * workspace_name or workspace_name)
         workspaces = []
         for line in stdout.strip().split('\n'):
             if line.strip():
-                # Remove asterisk and whitespace
+                # Remove asterisk indicator and whitespace
                 workspace = line.strip().lstrip('* ').strip()
                 if workspace:
                     workspaces.append(workspace)
@@ -210,17 +210,17 @@ class TerraformWrapper:
     
     def _create_or_switch_workspace(self) -> bool:
         """
-        Create or switch to the target workspace.
+        Create or switch to the target Terraform workspace.
         
         Returns:
             True if successful, False otherwise
         """
-        print(f"Managing workspace: {self.workspace_name}")
+        print(f"🏗️  Managing workspace: {self.workspace_name}")
         
         # Get current workspace
         return_code, stdout, stderr = self._run_command(["terraform", "workspace", "show"])
         if return_code != 0:
-            print(f"Error getting current workspace: {stderr}")
+            print(f"❌ Error getting current workspace: {stderr}")
             return False
         
         current_workspace = stdout.strip()
@@ -231,28 +231,28 @@ class TerraformWrapper:
         
         if self.workspace_name in existing_workspaces:
             if current_workspace == self.workspace_name:
-                print(f"Already in workspace: {self.workspace_name}")
+                print(f"✅ Already in workspace: {self.workspace_name}")
                 return True
             else:
-                print(f"Switching to workspace: {self.workspace_name}")
+                print(f"🔄 Switching to workspace: {self.workspace_name}")
                 return_code, _, stderr = self._run_command(["terraform", "workspace", "select", self.workspace_name])
                 if return_code != 0:
-                    print(f"Error switching workspace: {stderr}")
+                    print(f"❌ Error switching workspace: {stderr}")
                     return False
-                print(f"Successfully switched to workspace: {self.workspace_name}")
+                print(f"✅ Successfully switched to workspace: {self.workspace_name}")
                 return True
         else:
-            print(f"Creating new workspace: {self.workspace_name}")
+            print(f"🆕 Creating new workspace: {self.workspace_name}")
             return_code, _, stderr = self._run_command(["terraform", "workspace", "new", self.workspace_name])
             if return_code != 0:
-                print(f"Error creating workspace: {stderr}")
+                print(f"❌ Error creating workspace: {stderr}")
                 return False
-            print(f"Successfully created and switched to workspace: {self.workspace_name}")
+            print(f"✅ Successfully created and switched to workspace: {self.workspace_name}")
             return True
     
     def _run_terraform_init(self, force: bool = False) -> bool:
         """
-        Run terraform init.
+        Execute terraform init command.
         
         Args:
             force: Whether to force reinitialization
@@ -260,7 +260,7 @@ class TerraformWrapper:
         Returns:
             True if successful, False otherwise
         """
-        print("Running terraform init...")
+        print("🚀 Running terraform init...")
         
         command = ["terraform", "init"]
         if force:
@@ -269,23 +269,23 @@ class TerraformWrapper:
         return_code, stdout, stderr = self._run_command(command)
         
         if return_code != 0:
-            print(f"Error running terraform init: {stderr}")
+            print(f"❌ Error running terraform init: {stderr}")
             return False
         
-        print("terraform init completed successfully")
+        print("✅ terraform init completed successfully")
         return True
     
     def _run_terraform_plan(self, detailed: bool = False) -> bool:
         """
-        Run terraform plan.
+        Execute terraform plan command.
         
         Args:
-            detailed: Whether to show detailed output
+            detailed: Whether to show detailed exit codes
             
         Returns:
             True if successful, False otherwise
         """
-        print("Running terraform plan...")
+        print("📋 Running terraform plan...")
         
         command = ["terraform", "plan"]
         
@@ -299,24 +299,24 @@ class TerraformWrapper:
         return_code, stdout, stderr = self._run_command(command)
         
         if return_code == 0:
-            print("terraform plan completed successfully - no changes needed")
+            print("✅ terraform plan completed successfully - no changes needed")
             print(stdout)
             return True
         elif return_code == 1:
-            print("terraform plan failed:")
+            print("❌ terraform plan failed:")
             print(stderr)
             return False
         elif return_code == 2:
-            print("terraform plan completed successfully - changes detected:")
+            print("✅ terraform plan completed successfully - changes detected:")
             print(stdout)
             return True
         else:
-            print(f"Unexpected return code from terraform plan: {return_code}")
+            print(f"⚠️  Unexpected return code from terraform plan: {return_code}")
             return False
     
     def _run_terraform_apply(self, auto_approve: bool = False) -> bool:
         """
-        Run terraform apply.
+        Execute terraform apply command.
         
         Args:
             auto_approve: Whether to auto-approve changes
@@ -324,7 +324,7 @@ class TerraformWrapper:
         Returns:
             True if successful, False otherwise
         """
-        print("Running terraform apply...")
+        print("🚀 Running terraform apply...")
         
         command = ["terraform", "apply"]
         
@@ -338,15 +338,15 @@ class TerraformWrapper:
         return_code, stdout, stderr = self._run_command(command, capture_output=False)
         
         if return_code != 0:
-            print(f"Error running terraform apply: {stderr}")
+            print(f"❌ Error running terraform apply: {stderr}")
             return False
         
-        print("terraform apply completed successfully")
+        print("✅ terraform apply completed successfully")
         return True
     
     def _run_terraform_destroy(self, auto_approve: bool = False) -> bool:
         """
-        Run terraform destroy.
+        Execute terraform destroy command.
         
         Args:
             auto_approve: Whether to auto-approve changes
@@ -354,7 +354,7 @@ class TerraformWrapper:
         Returns:
             True if successful, False otherwise
         """
-        print("Running terraform destroy...")
+        print("🗑️  Running terraform destroy...")
         
         command = ["terraform", "destroy"]
         
@@ -368,43 +368,43 @@ class TerraformWrapper:
         return_code, stdout, stderr = self._run_command(command, capture_output=False)
         
         if return_code != 0:
-            print(f"Error running terraform destroy: {stderr}")
+            print(f"❌ Error running terraform destroy: {stderr}")
             return False
         
-        print("terraform destroy completed successfully")
+        print("✅ terraform destroy completed successfully")
         return True
     
     def _run_terraform_output(self) -> bool:
-        """Run terraform output."""
-        print("Running terraform output...")
+        """Execute terraform output command."""
+        print("📤 Running terraform output...")
         
         return_code, stdout, stderr = self._run_command(["terraform", "output"])
         
         if return_code != 0:
-            print(f"Error running terraform output: {stderr}")
+            print(f"❌ Error running terraform output: {stderr}")
             return False
         
-        print("terraform output:")
+        print("📤 terraform output:")
         print(stdout)
         return True
     
     def _run_terraform_show(self) -> bool:
-        """Run terraform show."""
-        print("Running terraform show...")
+        """Execute terraform show command."""
+        print("📊 Running terraform show...")
         
         return_code, stdout, stderr = self._run_command(["terraform", "show"])
         
         if return_code != 0:
-            print(f"Error running terraform show: {stderr}")
+            print(f"❌ Error running terraform show: {stderr}")
             return False
         
-        print("terraform show:")
+        print("📊 terraform show:")
         print(stdout)
         return True
     
     def _confirm_action(self, action: str) -> bool:
         """
-        Ask user for confirmation before executing an action.
+        Prompt user for confirmation before executing a destructive action.
         
         Args:
             action: Description of the action to confirm
@@ -413,7 +413,7 @@ class TerraformWrapper:
             True if user confirms, False otherwise
         """
         while True:
-            response = input(f"\nDo you want to proceed with {action}? (y/n): ").lower().strip()
+            response = input(f"\n⚠️  Do you want to proceed with {action}? (y/n): ").lower().strip()
             if response in ['y', 'yes']:
                 return True
             elif response in ['n', 'no']:
@@ -423,7 +423,7 @@ class TerraformWrapper:
     
     def execute_action(self, action: TerraformAction, **kwargs) -> bool:
         """
-        Execute a Terraform action.
+        Execute the specified Terraform action.
         
         Args:
             action: The Terraform action to execute
@@ -432,20 +432,20 @@ class TerraformWrapper:
         Returns:
             True if successful, False otherwise
         """
-        print(f"\n{'='*60}")
-        print(f"Terraform Wrapper - {action.value.upper()}")
-        print(f"Environment: {self.environment}")
-        print(f"Cluster: {self.cluster}")
-        print(f"Target Site: {self.target_site}")
-        print(f"Workspace: {self.workspace_name}")
-        print(f"GCP Resources Site: {self.get_gcp_resources_site}")
-        print(f"{'='*60}\n")
+        print(f"\n{'='*70}")
+        print(f"🚀 Terraform Wrapper - {action.value.upper()}")
+        print(f"🌍 Environment: {self.environment}")
+        print(f"🔧 Cluster: {self.cluster}")
+        print(f"🎯 Target Site: {self.target_site}")
+        print(f"🏗️  Workspace: {self.workspace_name}")
+        print(f"🔄 Refresh GCP Resource Vars: {self.refresh_gcp_resource_vars}")
+        print(f"{'='*70}\n")
         
-        # Check if Terraform is installed
+        # Verify Terraform installation
         if not self._check_terraform_installed():
             return False
         
-        # Create or switch to workspace
+        # Manage workspace
         if not self._create_or_switch_workspace():
             return False
         
@@ -460,7 +460,7 @@ class TerraformWrapper:
             auto_approve = kwargs.get('auto_approve', False)
             if not auto_approve:
                 if not self._confirm_action("terraform apply"):
-                    print("Operation cancelled by user")
+                    print("❌ Operation cancelled by user")
                     return False
             return self._run_terraform_apply(auto_approve=auto_approve)
         
@@ -468,7 +468,7 @@ class TerraformWrapper:
             auto_approve = kwargs.get('auto_approve', False)
             if not auto_approve:
                 if not self._confirm_action("terraform destroy"):
-                    print("Operation cancelled by user")
+                    print("❌ Operation cancelled by user")
                     return False
             return self._run_terraform_destroy(auto_approve=auto_approve)
         
@@ -479,33 +479,39 @@ class TerraformWrapper:
             return self._run_terraform_show()
         
         else:
-            print(f"Unknown action: {action}")
+            print(f"❌ Unknown action: {action}")
             return False
 
 
 def main():
     """
-    Main function to parse arguments and execute Terraform operations.
+    Main function to parse command line arguments and execute Terraform operations.
+    
+    Provides a command-line interface for the Terraform wrapper with support for
+    all major Terraform operations and GCP resource management.
     """
     parser = argparse.ArgumentParser(
-        description="Terraform Workspace Wrapper",
+        description="Terraform Workspace Wrapper with GCP Resource Discovery",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Initialize Terraform workspace
   python terraform_wrapper.py --environment stg --cluster r1-rai --action init
   
-  # Plan changes
-  python terraform_wrapper.py --environment prod-us --cluster rai --action plan
+  # Plan changes with GCP resource refresh
+  python terraform_wrapper.py --environment prod-us --cluster rai --action plan --refresh-gcp-resource-vars
   
   # Apply changes with auto-approve
   python terraform_wrapper.py --environment prod-eu --cluster r1-rai --action apply --auto-approve
   
-  # Destroy infrastructure
+  # Destroy infrastructure (with confirmation)
   python terraform_wrapper.py --environment stg --cluster rai --action destroy
   
   # Show current state
   python terraform_wrapper.py --environment prod-asia --cluster r1-rai --action show
+  
+  # Initialize with refreshed GCP resource variables
+  python terraform_wrapper.py --environment stg --cluster r1-rai --action init --refresh-gcp-resource-vars
         """
     )
     
@@ -513,21 +519,21 @@ Examples:
         '--environment',
         required=True,
         choices=['stg', 'prod-us', 'prod-eu', 'prod-asia'],
-        help='Environment to deploy to'
+        help='Target environment for deployment'
     )
     
     parser.add_argument(
         '--cluster',
         required=True,
         choices=['rai', 'r1-rai'],
-        help='Cluster type'
+        help='Cluster type to deploy'
     )
     
     parser.add_argument(
         '--target-site',
         default='primary',
         choices=['primary', 'dr'],
-        help='Target site (primary or disaster recovery)'
+        help='Target deployment site (primary or disaster recovery)'
     )
     
     parser.add_argument(
@@ -538,11 +544,9 @@ Examples:
     )
     
     parser.add_argument(
-        '--get-gcp-resources-site',
-        type=str,
-        default='none',
-        choices=['primary', 'dr', 'none'],
-        help='Get GCP resources from site (primary, dr, none) to generate tfvars file'
+        '--refresh-gcp-resource-vars',
+        action='store_true',
+        help='Refresh GCP resource variables by generating new tfvars files'
     )
     
     parser.add_argument(
@@ -566,18 +570,15 @@ Examples:
     args = parser.parse_args()
     
     try:
-        # Convert get_gcp_resources string to boolean
-        get_gcp_resources_site = args.get_gcp_resources_site.lower()
-        
         # Create wrapper instance
         wrapper = TerraformWrapper(
             environment=args.environment,
             cluster=args.cluster,
             target_site=args.target_site,
-            get_gcp_resources_site=get_gcp_resources_site
+            refresh_gcp_resource_vars=args.refresh_gcp_resource_vars
         )
         
-        # Execute the action
+        # Execute the requested action
         action = TerraformAction(args.action)
         success = wrapper.execute_action(
             action,
@@ -594,7 +595,7 @@ Examples:
             sys.exit(1)
             
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Error: {e}")
         sys.exit(1)
 
 

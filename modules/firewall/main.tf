@@ -2,7 +2,7 @@ resource "google_compute_firewall" "firewall_rule" {
   
   name          = var.firewall_rule.name
   description   = var.firewall_rule.description
-  network       = var.firewall_rule.network
+  network       = var.network
   priority      = var.firewall_rule.priority
   direction     = var.firewall_rule.direction
   disabled      = var.firewall_rule.disabled

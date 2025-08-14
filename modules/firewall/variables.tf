@@ -3,12 +3,16 @@ variable "project" {
   type        = string
 }
 
+variable "network" {
+  description = "The name of associated VPC network"
+  type        = string
+}
+
 variable "firewall_rule" {
   description = "Firewall rule to create"
   type = object({
     name                      = string
     description               = string
-    network                   = string
     priority                  = number
     direction                 = string
     disabled                  = bool

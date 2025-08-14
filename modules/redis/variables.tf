@@ -13,8 +13,8 @@ variable "display_name" {
   type        = string
 }
 
-variable "location_id" {
-  description = "The location ID for the Redis instance"
+variable "region" {
+  description = "The region for the Redis instance"
   type        = string
 }
 

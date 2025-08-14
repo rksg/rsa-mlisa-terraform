@@ -7,9 +7,7 @@ resource "google_dataproc_cluster" "dpc_cluster" {
 
   lifecycle {
     ignore_changes = [
-      effective_labels,
-      labels,
-      terraform_labels
+      labels
     ]
     prevent_destroy = true
   }

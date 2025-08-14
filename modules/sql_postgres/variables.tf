@@ -3,6 +3,11 @@ variable "project" {
   type        = string
 }
 
+variable "network" {
+  description = "The associated VPC network name"
+  type        = string
+}
+
 variable "instance_name" {
   description = "The name of the PostgreSQL instance"
   type        = string
@@ -62,7 +67,6 @@ variable "backup_configuration" {
 variable "ip_configuration" {
   description = "IP configuration for the PostgreSQL instance"
   type = object({
-    private_network = string
     ipv4_enabled = bool
   })
 }

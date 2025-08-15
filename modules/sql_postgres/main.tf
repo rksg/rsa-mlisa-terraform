@@ -10,7 +10,7 @@ resource "google_sql_database_instance" "postgres" {
     disk_size                   = var.data_disk_size_gb
     disk_type                   = var.data_disk_type
     disk_autoresize             = true
-    deletion_protection_enabled = true
+    deletion_protection_enabled = var.deletion_protection
     
     dynamic "database_flags" {
       for_each = var.database_flags != null ? var.database_flags : []
@@ -37,7 +37,7 @@ resource "google_sql_database_instance" "postgres" {
     }
    
   }
-  deletion_protection = true
+  deletion_protection = var.deletion_protection
 }
 
 resource "google_sql_database" "database" {

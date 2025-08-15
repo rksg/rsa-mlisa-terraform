@@ -19,6 +19,7 @@ import os
 import sys
 import subprocess
 import argparse
+import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 from enum import Enum
@@ -78,9 +79,6 @@ class TerraformWrapper:
         if self.refresh_gcp_resource_vars:
             self._generate_gcp_resources()
         
-        # Set Terraform environment variables
-        self._set_environment_variables()
-    
     def _generate_gcp_resources(self):
         """
         Generate GCP resource configurations and create tfvars files.
@@ -91,16 +89,13 @@ class TerraformWrapper:
         try:
             print(f"🔍 Generating GCP resources for {self.environment}-{self.cluster}...")
             
-            # Load configuration for GCP resource reader
-            with open(self.config_file, 'r') as f:
-                config_data = json.load(f)
-            
             # Initialize GCP resource reader with project and network configuration
             reader = GCPResourceReader(
-                project_id=config_data[self.environment]['project_id'],
-                network_name=config_data[self.environment][self.cluster]['vpc'],
-                region=config_data[self.environment]['region'],
-                ip_ranges=config_data[self.environment][self.cluster]['ip_ranges']
+                project_id=self.config[self.environment]['project_id'],
+                network_name=self.config[self.environment][self.cluster]['vpc'],
+                region=self.config[self.environment]['region'],
+                dr_region=self.config[self.environment]['dr_region'],
+                ip_ranges=self.config[self.environment][self.cluster]['ip_ranges']
             )
             
             # Discover all GCP resources for both primary and DR sites
@@ -141,22 +136,19 @@ class TerraformWrapper:
         if self.cluster not in env_config:
             raise ValueError(f"Cluster '{self.cluster}' not found in environment '{self.environment}'")
         
+        if self.config[self.environment]['region'] is None or self.config[self.environment]['dr_region'] is None:
+            raise ValueError(f"Region or DR region not found in configuration for environment '{self.environment}'")
+        
+        if self.config[self.environment][self.cluster]['vpc'] is None:
+            raise ValueError(f"VPC not found in configuration for environment '{self.environment}' and cluster '{self.cluster}'")
+        
+        if self.config[self.environment][self.cluster]['ip_ranges'] is None:
+            raise ValueError(f"IP ranges not found in configuration for environment '{self.environment}' and cluster '{self.cluster}'")
+
         # Only validate tfvars file exists if we're not generating it
         if not self.refresh_gcp_resource_vars and not self.tfvars_file.exists():
             raise FileNotFoundError(f"Terraform variables file not found: {self.tfvars_file}")
     
-    def _set_environment_variables(self):
-        """Set Terraform environment variables based on configuration."""
-        env_config = self.config[self.environment]
-        
-        # Set common environment variables
-        os.environ["TF_VAR_project"] = env_config["project_id"]
-        os.environ["TF_VAR_environment"] = self.environment
-        os.environ["TF_VAR_cluster"] = self.cluster
-        os.environ["TF_VAR_target_site"] = self.target_site
-
-        # Set region based on deployment target
-        os.environ["TF_VAR_region"] = env_config["dr_region"] if self.target_site == "dr" else env_config["region"]
     
     def _run_command(self, command: List[str], capture_output: bool = True) -> Tuple[int, str, str]:
         """
@@ -325,7 +317,7 @@ class TerraformWrapper:
             True if successful, False otherwise
         """
         print("🚀 Running terraform apply...")
-        
+        start_time = time.time()
         command = ["terraform", "apply"]
         
         # Add tfvars file if it exists
@@ -337,11 +329,16 @@ class TerraformWrapper:
         
         return_code, stdout, stderr = self._run_command(command, capture_output=False)
         
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        
         if return_code != 0:
             print(f"❌ Error running terraform apply: {stderr}")
+            print(f"⏱️  Time taken: {elapsed_time:.2f} seconds")
             return False
         
         print("✅ terraform apply completed successfully")
+        print(f"⏱️  Time taken: {elapsed_time:.2f} seconds")
         return True
     
     def _run_terraform_destroy(self, auto_approve: bool = False) -> bool:
@@ -355,7 +352,7 @@ class TerraformWrapper:
             True if successful, False otherwise
         """
         print("🗑️  Running terraform destroy...")
-        
+        start_time = time.time()
         command = ["terraform", "destroy"]
         
         # Add tfvars file if it exists
@@ -367,11 +364,16 @@ class TerraformWrapper:
         
         return_code, stdout, stderr = self._run_command(command, capture_output=False)
         
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        
         if return_code != 0:
             print(f"❌ Error running terraform destroy: {stderr}")
+            print(f"⏱️  Time taken: {elapsed_time:.2f} seconds")
             return False
         
         print("✅ terraform destroy completed successfully")
+        print(f"⏱️  Time taken: {elapsed_time:.2f} seconds")
         return True
     
     def _run_terraform_output(self) -> bool:

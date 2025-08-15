@@ -8,12 +8,6 @@ variable "region" {
   type        = string
 }
 
-variable "target_site" {
-  description = "Target site value will be dr or empty in case of primary site"
-  type        = string
-  default     = ""
-}
-
 variable "compute_network" {
   description = "Compute network configuration"
   type = object({
@@ -220,6 +214,7 @@ variable "container_clusters" {
     name = string
     subnetwork = string
     default_max_pods_per_node = string
+    deletion_protection = bool
     ip_allocation_policy = object({
       cluster_secondary_range_name  = string
       services_secondary_range_name = string
@@ -325,6 +320,7 @@ variable "sql_postgres_instances" {
       name = string
       value = string
     }))
+    deletion_protection = bool
     backup_configuration = object({
       enabled = bool
       binary_log_enabled = bool

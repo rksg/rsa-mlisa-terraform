@@ -189,6 +189,7 @@ module "container_clusters" {
   cluster_name               = each.value.name
   network                    = var.compute_network.name
   subnetwork                 = each.value.subnetwork
+  deletion_protection        = each.value.deletion_protection
   default_max_pods_per_node  = each.value.default_max_pods_per_node
   ip_allocation_policy      = each.value.ip_allocation_policy
   logging_service            = each.value.logging_service
@@ -205,7 +206,9 @@ module "container_clusters" {
 module "redis_instances" {
   source = "./modules/redis"
   for_each = { for idx, redis in var.redis_instances : redis.name => redis }
-  
+  depends_on = [
+    module.subnetworks
+  ]
   # Use values from tfvars.json structure
   project                    = var.project
   instance_name              = each.value.name
@@ -228,13 +231,16 @@ module "redis_instances" {
 module "sql_postgres_instances" {
   source = "./modules/sql_postgres"
   for_each = { for idx, postgres in var.sql_postgres_instances : postgres.name => postgres }
-  
+  depends_on = [
+    module.subnetworks
+  ]  
   # Use values from tfvars.json structure
   project                    = var.project
   instance_name              = each.value.name
   database_version           = each.value.database_version
   region                     = var.region
   network                    = var.compute_network.name
+  deletion_protection        = each.value.deletion_protection
   machine_type               = each.value.machine_type
   availability_type          = each.value.availability_type
   data_disk_size_gb          = each.value.data_disk_size_gb

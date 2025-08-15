@@ -15,6 +15,8 @@ resource "google_container_cluster" "cluster" {
   remove_default_node_pool = true
   initial_node_count       = 1
 
+  deletion_protection = var.deletion_protection
+  
   ip_allocation_policy {
     cluster_secondary_range_name  = var.ip_allocation_policy.cluster_secondary_range_name
     services_secondary_range_name = var.ip_allocation_policy.services_secondary_range_name

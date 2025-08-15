@@ -42,6 +42,7 @@ class GCPResourceReader:
     def __init__(self, project_id: Optional[str] = None, 
                  network_name: Optional[str] = None, 
                  region: Optional[str] = None,
+                 dr_region: Optional[str] = None,
                  ip_ranges: Optional[str] = None):
         """
         Initialize the GCP Resource Reader.
@@ -55,6 +56,7 @@ class GCPResourceReader:
         self.project_id = project_id
         self.network_name = network_name
         self.region = region
+        self.dr_region = dr_region
         self.ip_ranges = ip_ranges
         self.subnetwork_name = 'default'
         
@@ -663,6 +665,7 @@ class GCPResourceReader:
                         'subnetwork': cluster['subnetwork'],
                         'default_max_pods_per_node': cluster['defaultMaxPodsConstraint']['maxPodsPerNode'],
                         'ip_allocation_policy': self._extract_ip_allocation_policy(cluster.get('ipAllocationPolicy'),False),
+                        'deletion_protection': cluster['deletionProtection'] if cluster.get('deletionProtection') else True,
                         'logging_service': cluster['loggingService'],
                         'monitoring_service': cluster['monitoringService'],
                         'release_channel': {
@@ -684,6 +687,7 @@ class GCPResourceReader:
                         'subnetwork': cluster['subnetwork'] + '-dr',  # DR subnetwork gets '-dr' suffix
                         'default_max_pods_per_node': cluster['defaultMaxPodsConstraint']['maxPodsPerNode'],
                         'ip_allocation_policy': self._extract_ip_allocation_policy(cluster.get('ipAllocationPolicy'),True),
+                        'deletion_protection': False,
                         'logging_service': cluster['loggingService'],
                         'monitoring_service': cluster['monitoringService'],
                         'release_channel': {
@@ -774,7 +778,8 @@ class GCPResourceReader:
         for node_pool in node_pools:
             pool_info = {
                 'name': node_pool['name'] + '-dr' if is_dr else node_pool['name'],
-                'initial_node_count': node_pool.get('initialNodeCount') if node_pool.get('initialNodeCount') else 1,
+                # DR node pool initial node count is always 1 for faster deployment
+                'initial_node_count': 1 if is_dr or node_pool.get('initialNodeCount') is None else node_pool.get('initialNodeCount'),
                 'autoscaling': {
                     'enabled': node_pool.get('autoscaling', {}).get('enabled'),
                     'total_min_node_count': node_pool.get('autoscaling', {}).get('totalMinNodeCount'),
@@ -1190,6 +1195,7 @@ class GCPResourceReader:
                                     'instance_type': instance.get('instanceType', ''),
                                     'machine_type': instance.get('settings', {}).get('tier', ''),
                                     'database_flags': instance.get('settings', {}).get('databaseFlags', []),
+                                    'deletion_protection':  True,
                                     'backup_configuration': {
                                         'enabled': instance.get('settings', {}).get('backupConfiguration', {}).get('enabled', False),
                                         'binary_log_enabled': instance.get('settings', {}).get('backupConfiguration', {}).get('binaryLoggingEnabled', False)
@@ -1211,6 +1217,7 @@ class GCPResourceReader:
                                     'instance_type': instance.get('instanceType', ''),
                                     'machine_type': instance.get('settings', {}).get('tier', ''),
                                     'database_flags': instance.get('settings', {}).get('databaseFlags', []),
+                                    'deletion_protection': False,
                                     'backup_configuration': {
                                         'enabled': instance.get('settings', {}).get('backupConfiguration', {}).get('enabled', False),
                                         'binary_log_enabled': instance.get('settings', {}).get('backupConfiguration', {}).get('binaryLoggingEnabled', False)
@@ -1253,8 +1260,9 @@ class GCPResourceReader:
         print(f"Fetching all GCP resources for project: {self.project_id}")
         
         all_resources = {
-            'project_id': self.project_id,
             'timestamp': datetime.datetime.now().isoformat(),
+            'project': self.project_id,
+            'region': self.region,
             'compute_network': {},
             'compute_subnetworks': [],
             'nat_routers': [],
@@ -1271,6 +1279,8 @@ class GCPResourceReader:
 
         all_resources_dr = {
             'timestamp': datetime.datetime.now().isoformat(),
+            'project': self.project_id,
+            'region': self.dr_region,
             'compute_network': {},
             'compute_subnetworks': [],
             'nat_routers': [],
@@ -1396,6 +1406,7 @@ def main():
             project_id=config_data[args.environment]['project_id'], 
             network_name=config_data[args.environment][args.cluster]['vpc'],
             region=config_data[args.environment]['region'],
+            dr_region=config_data[args.environment]['dr_region'],
             ip_ranges=config_data[args.environment][args.cluster]['ip_ranges'] 
         )
         print(f"Connected to project: {reader.project_id}")

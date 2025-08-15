@@ -41,8 +41,7 @@ The wrapper uses configuration from `configs/config.json` with comprehensive IP 
   "stg": {
     "project_id": "ops-alto-01",
     "region": "us-central1",
-    "dr_project_id": "ops-alto-01-dr",
-    "dr_region": "us-central1",
+    "dr_region": "us-east1",
     "rai": {
       "vpc": "mlisa-sa",
       "ip_ranges": {

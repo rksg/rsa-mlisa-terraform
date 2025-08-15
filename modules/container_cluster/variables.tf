@@ -60,6 +60,12 @@ variable "release_channel" {
   })
 }
 
+variable "deletion_protection" {
+  description = "Deletion protection flag for the GKE clsuter"
+  type = bool
+  default = true
+}
+
 variable "addons_config" {
   description = "Addons configuration for the cluster"
   type = object({
@@ -129,4 +135,4 @@ variable "node_pools" {
       metadata = map(string)
     })
   }))
-} 
+}

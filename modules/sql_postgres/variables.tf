@@ -75,3 +75,9 @@ variable "databases" {
   description = "List of databases for the PostgreSQL instance"
   type = list(string)
 }
+
+variable "deletion_protection" {
+  description = "Deletion protection flag for the PostgreSQL instance"
+  type = bool
+  default = true
+}

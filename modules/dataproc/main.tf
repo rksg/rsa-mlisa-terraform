@@ -9,7 +9,6 @@ resource "google_dataproc_cluster" "dpc_cluster" {
     ignore_changes = [
       labels
     ]
-    prevent_destroy = true
   }
   
   cluster_config {

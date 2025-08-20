@@ -60,6 +60,25 @@ The wrapper uses configuration from `configs/config.json` with comprehensive IP 
           "gke_master_ip_cidr_range": "10.0.0.0/28"
         }
       }
+    },
+    "r1-rai": {
+      "vpc": "mlisa-alto",
+      "ip_ranges": {
+        "primary": {
+          "subnet_ip_cidr_range": "10.1.1.0/28",
+          "secondary_ip_range_pod": "10.2.2.0/24",
+          "secondary_ip_range_svc": "10.3.3.0/24",
+          "vpc_connector_ip_cidr_range": "10.4.4.0/28",
+          "gke_master_ip_cidr_range": "10.5.5.0/28"
+        },
+        "dr": {
+          "subnet_ip_cidr_range": "10.6.6.0/28",
+          "secondary_ip_range_pod": "10.7.7.0/24",
+          "secondary_ip_range_svc": "10.8.8.0/24",
+          "vpc_connector_ip_cidr_range": "10.9.9.0/28",
+          "gke_master_ip_cidr_range": "10.0.0.0/28"
+        }
+      }
     }
   }
 }

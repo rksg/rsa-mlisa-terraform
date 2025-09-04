@@ -69,9 +69,6 @@ variable "deletion_protection" {
 variable "addons_config" {
   description = "Addons configuration for the cluster"
   type = object({
-    kubernetes_dashboard = object({
-      disabled = bool
-    })
     network_policy_config = object({
       disabled = bool
     })

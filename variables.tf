@@ -229,9 +229,6 @@ variable "container_clusters" {
       master_ipv4_cidr_block = string
     })
     addons_config = object({
-      kubernetes_dashboard = object({
-        disabled = bool
-      })
       network_policy_config = object({
         disabled = bool
       })

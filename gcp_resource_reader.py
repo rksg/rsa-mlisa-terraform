@@ -83,7 +83,6 @@ class GCPResourceReader:
                 )
                 if result.returncode != 0 or result.stdout.strip() == "":
                     raise ValueError(f"Project ID '{self.project_id}' not found or not accessible.")
-                subprocess.run(['gcloud', 'config', 'set', 'project', self.project_id], check=True)
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 print(f"Error checking project: {e}")
                 raise ValueError(f"Project ID '{self.project_id}' not found or not accessible.")
@@ -339,7 +338,7 @@ class GCPResourceReader:
         try:
             result = subprocess.run([
                 'gcloud', 'dataproc', 'clusters', 'list', 
-                '--region', self.region, '--format=json'
+                '--region', self.region, '--project', self.project_id, '--format=json'
             ], capture_output=True, text=True, check=True)
             
             if result.returncode == 0:
@@ -463,7 +462,7 @@ class GCPResourceReader:
         
         try:
             result = subprocess.run([
-                'gcloud', 'functions', 'list', '--format=json', '--filter', vpc_connector_filter
+                'gcloud', 'functions', 'list', '--format=json', '--filter', vpc_connector_filter, '--project', self.project_id
             ], capture_output=True, text=True, check=True)
             
             if result.returncode == 0:
@@ -528,7 +527,7 @@ class GCPResourceReader:
         
         try:
             result = subprocess.run([
-                'gcloud', 'run', 'services', 'list', '--format=json'
+                'gcloud', 'run', 'services', 'list', '--format=json', '--project', self.project_id
             ], capture_output=True, text=True, check=True)
             
             if result.returncode == 0:
@@ -654,7 +653,7 @@ class GCPResourceReader:
         try:
             result = subprocess.run([
                 'gcloud', 'container', 'clusters', 'list', 
-                '--filter', f"subnetwork = \"{self.subnetwork_name}\"", '--format=json'
+                '--filter', f"subnetwork = \"{self.subnetwork_name}\"", '--format=json', '--project', self.project_id
             ], capture_output=True, text=True, check=True)
             
             if result.returncode == 0:
@@ -742,9 +741,6 @@ class GCPResourceReader:
         if not config:
             return None
         return {
-            'kubernetes_dashboard': {
-                'disabled': config.get('kubernetesDashboard', {}).get('disabled')
-            } if config.get('kubernetesDashboard') else None,
             'network_policy_config': {
                 'disabled': config.get('networkPolicyConfig', {}).get('disabled')
             } if config.get('networkPolicyConfig') else None,
@@ -844,7 +840,7 @@ class GCPResourceReader:
                 'gcloud', 'compute', 'firewall-rules', 'list',
                 '--project', self.project_id,
                 '--filter', f'network="{self.network_name}"',
-                '--format', 'json'
+                '--format', 'json', '--project', self.project_id
             ], capture_output=True, text=True, check=True)
             
             if result.returncode == 0:
@@ -959,7 +955,7 @@ class GCPResourceReader:
                 '--project', self.project_id,
                 '--regions', self.region,
                 '--filter', subnetwork_filter,
-                '--format', 'json'
+                '--format', 'json', '--project', self.project_id
             ], capture_output=True, text=True, check=True)
             
             if result.returncode == 0:
@@ -993,20 +989,25 @@ class GCPResourceReader:
             raise ValueError(f"Error getting compute addresses: {e}")   
         return primary_addresses, dr_addresses
 
-    def get_vpc_access_connectors(self) -> List[Dict[str, Any]]:
+    def get_vpc_access_connectors(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Get VPC Access Connectors for the specified network.
         
         Returns:
-            List of VPC Access Connector dictionaries
+            Tuple of (primary_connectors, dr_connectors) lists containing:
+            - name: Connector name (DR version gets '-dr' suffix)
+            - min_throughput: Minimum throughput
+            - max_throughput: Maximum throughput
+            - machine_type: Machine type
+            - subnet: Subnet configuration
         """
         connectors = []
-        
+        connectors_dr = []
         try:
             # Use gcloud CLI to get global addresses since the API client doesn't have the method
             result = subprocess.run([
                 'gcloud', 'compute', 'networks', 'vpc-access', 'connectors', 'list', 
-                '--region', self.region, '--format=json',
+                '--region', self.region, '--format=json', '--project', self.project_id,
                 '--filter', f'network="{self.network_name}"'
             ], capture_output=True, text=True, check=True)
 
@@ -1024,10 +1025,22 @@ class GCPResourceReader:
                         }
                     }
                     connectors.append(connector_info)
+                    dr_connector_info = {
+                        'name': connector['name'].rsplit('/', 1)[-1] + '-dr',
+                        'min_throughput': connector['minThroughput'],
+                        'max_throughput': connector['maxThroughput'],
+                        'machine_type': connector['machineType'],
+                        'subnet': {
+                            'name': connector['subnet']['name'] + '-dr'
+                        } if connector['subnet'] else {
+                            'name': connector['name'].rsplit('/', 1)[-1] + '-dr'
+                        }
+                    }
+                    connectors_dr.append(dr_connector_info) 
         except Exception as e:
             print(f"Error getting VPC Access Connectors: {e}")
             raise ValueError(f"Error getting VPC Access Connectors: {e}")
-        return connectors
+        return connectors, connectors_dr
 
     def get_redis_instances(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
@@ -1059,7 +1072,7 @@ class GCPResourceReader:
             # Use gcloud CLI to get Redis instances since the API client requires location
             result = subprocess.run([
                 'gcloud', 'redis', 'instances', 'list', 
-                '--region', self.region, '--format=json',
+                '--region', self.region, '--format=json', '--project', self.project_id,
                 '--filter', f'authorizedNetwork : projects/{self.project_id}/global/networks/{self.network_name}'
             ], capture_output=True, text=True, check=True)
 
@@ -1126,7 +1139,7 @@ class GCPResourceReader:
             result = subprocess.run([
                 'gcloud', 'sql', 'databases', 'list', 
                 '--instance', instance_name,
-                '--format=json'
+                '--format=json', '--project', self.project_id
             ], capture_output=True, text=True, check=True)
 
             if result.returncode == 0:
@@ -1167,9 +1180,9 @@ class GCPResourceReader:
             # Use gcloud CLI to get SQL instances
             result = subprocess.run([
                 'gcloud', 'sql', 'instances', 'list', 
-                '--format=json'
+                '--format=json', '--project', self.project_id
             ], capture_output=True, text=True, check=True)
-
+            
             if result.returncode == 0:
                 for instance in json.loads(result.stdout):
                     # Check if this is a PostgreSQL instance
@@ -1356,9 +1369,9 @@ class GCPResourceReader:
             print(f"Found {len(all_resources['sql_postgres_instances'])} PostgreSQL Instances")
             
             # Note: VPC Access Connectors are commented out for now
-            #print("Fetching VPC Access Connectors...")
-            #all_resources['vpc_access_connectors'] = self.get_vpc_access_connectors()
-            #print(f"Found {len(all_resources['vpc_access_connectors'])} VPC Access Connectors")
+            print("Fetching VPC Access Connectors...")
+            all_resources['vpc_access_connectors'], all_resources_dr['vpc_access_connectors'] = self.get_vpc_access_connectors()
+            print(f"Found {len(all_resources['vpc_access_connectors'])} VPC Access Connectors")
 
         except Exception as e:
             print(f"Error fetching all resources: {e}")

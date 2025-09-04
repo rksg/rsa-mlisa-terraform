@@ -39,4 +39,20 @@ resource "google_container_cluster" "cluster" {
   cluster_autoscaling {
     autoscaling_profile = var.cluster_autoscaling.autoscaling_profile
   }
+  
+  workload_identity_config {
+    workload_pool = "${var.project}.svc.id.goog"
+  }
+
+  addons_config {
+    network_policy_config {
+      disabled = var.addons_config.network_policy_config.disabled
+    }
+    gce_persistent_disk_csi_driver_config {
+      enabled = var.addons_config.gce_persistent_disk_csi_driver_config.enabled
+    }
+    gcs_fuse_csi_driver_config {
+      enabled = var.addons_config.gcs_fuse_csi_driver_config.enabled
+    }
+  }
 }

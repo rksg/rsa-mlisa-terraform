@@ -48,3 +48,15 @@ resource "google_sql_database" "database" {
   name     = each.value
   instance = var.instance_name
 }
+
+resource "google_sql_user" "users" {
+  depends_on =[
+    resource.google_sql_database_instance.postgres
+  ]
+  name     = var.database_user
+  instance = var.instance_name
+  password_wo = var.sql_postgres_password[var.database_user]
+  lifecycle {
+    ignore_changes = [password]
+  }
+}

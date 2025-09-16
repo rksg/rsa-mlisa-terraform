@@ -248,5 +248,7 @@ module "sql_postgres_instances" {
   database_flags             = each.value.database_flags
   backup_configuration       = each.value.backup_configuration
   ip_configuration           = each.value.ip_configuration
+  database_user              = each.value.database_user
+  sql_postgres_password      = var.sql_postgres_password
   databases                  = each.value.databases
 }

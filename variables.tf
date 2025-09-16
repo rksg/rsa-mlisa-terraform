@@ -328,7 +328,18 @@ variable "sql_postgres_instances" {
     availability_type = string
     data_disk_size_gb = string
     data_disk_type = string
+    database_user = string
     databases = list(string)
   }))
   default = []
+}
+
+variable "sql_postgres_password" {
+  description = <<-EOT
+      Variable to password for druid and mlisa database instances
+      pass values through ENV vars.
+      $export TF_VAR_sql_postgres_password="{ druid = \"sample\", mlisa = \"sample\" }"
+    EOT
+  sensitive = true
+  type = map(string)
 }

@@ -14,18 +14,14 @@ Key Features:
 - Comprehensive error handling and logging
 """
 
-import json
-import os
 import sys
 import subprocess
 import argparse
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 from enum import Enum
-
-# Import the GCP resource reader for automatic resource discovery
-from gcp_resource_reader import GCPResourceReader
+import json
 
 
 class TerraformAction(Enum):
@@ -36,18 +32,17 @@ class TerraformAction(Enum):
     DESTROY = "destroy"
     OUTPUT = "output"
     SHOW = "show"
+    GET_REPLACEMENT_VALUES = "get_replacement_values"
 
 
 class TerraformWrapper:
     """
     Terraform workspace wrapper with comprehensive environment and DR site support.
     
-    Manages Terraform workspaces, executes Terraform commands, and optionally generates
-    GCP resource configurations for both primary and disaster recovery sites.
+    Manages Terraform workspaces, executes Terraform commands
     """
     
-    def __init__(self, environment: str, cluster: str, target_site: str = "primary", 
-                 refresh_gcp_resource_vars: bool = False):
+    def __init__(self, environment: str, cluster: str, target_site: str = "primary"):
         """
         Initialize the Terraform wrapper.
         
@@ -55,101 +50,17 @@ class TerraformWrapper:
             environment: Target environment (stg, prod-us, prod-eu, prod-asia)
             cluster: Cluster type (rai, r1-rai)
             target_site: Deployment target (primary or dr)
-            refresh_gcp_resource_vars: Whether to refresh GCP resource variables
         """
         self.environment = environment
         self.cluster = cluster
         self.target_site = target_site
-        self.refresh_gcp_resource_vars = refresh_gcp_resource_vars
         self.workspace_name = f"{environment}-{cluster}-{target_site}"
         
         # Initialize file paths
         self.root_dir = Path(__file__).parent
-        self.config_dir = self.root_dir / "configs"
-        self.config_file = self.config_dir / "config.json"
-        self.tfvars_file_primary = self.config_dir / environment / f"{cluster}.tfvars.json"
-        self.tfvars_file_dr = self.config_dir / environment / f"{cluster}-dr.tfvars.json"
-        self.tfvars_file = self.tfvars_file_primary if self.target_site == "primary" else self.tfvars_file_dr
+        self.tf_vars_dir = self.root_dir / "tf-vars"
+        self.tfvars_file = self.tf_vars_dir / environment / f"{cluster}.tfvars.json" if self.target_site == "primary" else self.tf_vars_dir / environment / f"{cluster}-dr.tfvars.json"
 
-        # Load and validate configuration
-        self.config = self._load_config()
-        self._validate_config()
-        
-        # Generate GCP resources if requested
-        if self.refresh_gcp_resource_vars:
-            self._generate_gcp_resources()
-        
-    def _generate_gcp_resources(self):
-        """
-        Generate GCP resource configurations and create tfvars files.
-        
-        Discovers GCP resources using the GCPResourceReader and generates both
-        primary and DR site configurations with appropriate IP ranges.
-        """
-        try:
-            print(f"🔍 Generating GCP resources for {self.environment}-{self.cluster}...")
-            
-            # Initialize GCP resource reader with project and network configuration
-            reader = GCPResourceReader(
-                project_id=self.config[self.environment]['project_id'],
-                network_name=self.config[self.environment][self.cluster]['vpc'],
-                region=self.config[self.environment]['region'],
-                dr_region=self.config[self.environment]['dr_region'],
-                ip_ranges=self.config[self.environment][self.cluster]['ip_ranges']
-            )
-            
-            # Discover all GCP resources for both primary and DR sites
-            resources, resources_dr = reader.get_all_resources()
-            
-            # Save primary site configuration
-            with open(self.tfvars_file_primary, 'w') as f:
-                json.dump(resources, f, indent=2)
-            
-            # Save DR site configuration
-            with open(self.tfvars_file_dr, 'w') as f:
-                json.dump(resources_dr, f, indent=2)
-            
-            print(f"✅ GCP resources generated successfully")
-            print(f"   Primary: {self.tfvars_file_primary}")
-            print(f"   DR Site: {self.tfvars_file_dr}")
-            
-        except Exception as e:
-            print(f"⚠️  Warning: Failed to generate GCP resources: {e}")
-            raise ValueError(f"Failed to generate GCP resources: {e}")
-    
-    def _load_config(self) -> Dict:
-        """Load configuration from JSON file."""
-        try:
-            with open(self.config_file, 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Configuration file not found: {self.config_file}")
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in configuration file: {e}")
-    
-    def _validate_config(self):
-        """Validate environment and cluster configuration."""
-        if self.environment not in self.config:
-            raise ValueError(f"Environment '{self.environment}' not found in configuration")
-        
-        env_config = self.config[self.environment]
-        if self.cluster not in env_config:
-            raise ValueError(f"Cluster '{self.cluster}' not found in environment '{self.environment}'")
-        
-        if self.config[self.environment]['region'] is None or self.config[self.environment]['dr_region'] is None:
-            raise ValueError(f"Region or DR region not found in configuration for environment '{self.environment}'")
-        
-        if self.config[self.environment][self.cluster]['vpc'] is None:
-            raise ValueError(f"VPC not found in configuration for environment '{self.environment}' and cluster '{self.cluster}'")
-        
-        if self.config[self.environment][self.cluster]['ip_ranges'] is None:
-            raise ValueError(f"IP ranges not found in configuration for environment '{self.environment}' and cluster '{self.cluster}'")
-
-        # Only validate tfvars file exists if we're not generating it
-        if not self.refresh_gcp_resource_vars and not self.tfvars_file.exists():
-            raise FileNotFoundError(f"Terraform variables file not found: {self.tfvars_file}")
-    
-    
     def _run_command(self, command: List[str], capture_output: bool = True) -> Tuple[int, str, str]:
         """
         Execute a shell command and return the result.
@@ -340,7 +251,38 @@ class TerraformWrapper:
         print("✅ terraform apply completed successfully")
         print(f"⏱️  Time taken: {elapsed_time:.2f} seconds")
         return True
-    
+
+    def _run_terraform_get_replacement_values(self) -> dict[str, str]:
+        """Execute terraform get replacement values command."""
+        return_code, stdout, stderr = self._run_command(["terraform", "output", "-json"])
+        
+        if return_code != 0:
+            print(f"❌ Error running terraform get replacement values: {stderr}")
+            return {}
+        
+        try:
+            output_data = json.loads(stdout)
+            hdfs_host = "hdfs://" + output_data["dpc_master_node"]["value"][0]
+            hdfs_yarn_rm_host = output_data["dpc_master_node"]["value"][0]
+            
+            postgresql_druid_host = None
+            for key, value in output_data["sql_private_ip_address"]["value"].items():
+                if "mlisa-sql-druid" in key:
+                    postgresql_druid_host = value["private_ip_address"]
+                    break
+            
+            if postgresql_druid_host is None:
+                print("Warning: No PostgreSQL Druid host found")
+                postgresql_druid_host = ""
+            
+            return {"hdfs_host": hdfs_host, "hdfs_yarn_rm_host": hdfs_yarn_rm_host, "postgresql_druid_host": postgresql_druid_host}
+        except json.JSONDecodeError as e:
+            print(f"❌ Error parsing JSON output: {e}")
+            return {}
+        except KeyError as e:
+            print(f"❌ Error accessing expected key in output: {e}")
+            return {}
+
     def _run_terraform_destroy(self, auto_approve: bool = False) -> bool:
         """
         Execute terraform destroy command.
@@ -440,7 +382,6 @@ class TerraformWrapper:
         print(f"🔧 Cluster: {self.cluster}")
         print(f"🎯 Target Site: {self.target_site}")
         print(f"🏗️  Workspace: {self.workspace_name}")
-        print(f"🔄 Refresh GCP Resource Vars: {self.refresh_gcp_resource_vars}")
         print(f"{'='*70}\n")
         
         # Verify Terraform installation
@@ -500,8 +441,8 @@ Examples:
   # Initialize Terraform workspace
   python terraform_wrapper.py --environment stg --cluster r1-rai --action init
   
-  # Plan changes with GCP resource refresh
-  python terraform_wrapper.py --environment prod-us --cluster rai --action plan --refresh-gcp-resource-vars
+  # Plan changes
+  python terraform_wrapper.py --environment prod-us --cluster rai --action plan
   
   # Apply changes with auto-approve
   python terraform_wrapper.py --environment prod-eu --cluster r1-rai --action apply --auto-approve
@@ -512,8 +453,11 @@ Examples:
   # Show current state
   python terraform_wrapper.py --environment prod-asia --cluster r1-rai --action show
   
-  # Initialize with refreshed GCP resource variables
-  python terraform_wrapper.py --environment stg --cluster r1-rai --action init --refresh-gcp-resource-vars
+  # Initialize
+  python terraform_wrapper.py --environment stg --cluster r1-rai --action init
+  
+  # Get replacement values
+  python terraform_wrapper.py --environment stg --cluster r1-rai --action get_replacement_values
         """
     )
     
@@ -546,12 +490,6 @@ Examples:
     )
     
     parser.add_argument(
-        '--refresh-gcp-resource-vars',
-        action='store_true',
-        help='Refresh GCP resource variables by generating new tfvars files'
-    )
-    
-    parser.add_argument(
         '--auto-approve',
         action='store_true',
         help='Auto-approve changes (for apply and destroy actions)'
@@ -577,18 +515,23 @@ Examples:
             environment=args.environment,
             cluster=args.cluster,
             target_site=args.target_site,
-            refresh_gcp_resource_vars=args.refresh_gcp_resource_vars
         )
         
         # Execute the requested action
         action = TerraformAction(args.action)
+
+        if action == TerraformAction.GET_REPLACEMENT_VALUES:
+            replacement_values = wrapper._run_terraform_get_replacement_values()
+            print(replacement_values)
+            sys.exit(0)
+        
         success = wrapper.execute_action(
             action,
             auto_approve=args.auto_approve,
             force=args.force,
             detailed=args.detailed
         )
-        
+
         if success:
             print(f"\n✅ {action.value.upper()} completed successfully")
             sys.exit(0)

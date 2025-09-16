@@ -4,6 +4,10 @@
 /terraform.tfstate.d
 /test_wrapper.py
 
+#GCS TF Var and Kuberenetes resources files
+tf-vars/
+kube-resources/
+
 # Local .terraform directories
 .terraform/
 

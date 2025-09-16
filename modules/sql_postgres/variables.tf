@@ -76,6 +76,17 @@ variable "databases" {
   type = list(string)
 }
 
+variable "database_user" {
+  description = "Databse user name"
+  type = string
+}
+
+variable "sql_postgres_password" {
+  description = "Password for druid and mlisa database instances, pass values through ENV vars"
+  sensitive = true
+  type = map(string)
+}
+
 variable "deletion_protection" {
   description = "Deletion protection flag for the PostgreSQL instance"
   type = bool

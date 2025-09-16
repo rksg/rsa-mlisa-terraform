@@ -39,20 +39,22 @@ Usage: $0 <environment> <cluster> <action> [options]
 Arguments:
   environment    Environment to deploy to (stg, prod-us, prod-eu, prod-asia)
   cluster        Cluster type (rai, r1-rai)
-  action         Terraform action (init, plan, apply, destroy, output, show)
+  action         Terraform action (init, plan, apply, destroy, output, show, get_replacement_values)
 
 Options:
   --target-site <site>    Target site (primary, dr) [default: primary]
-  --refresh-gcp-resource-vars    Refresh GCP resource variables by calling generate_gcp_resources with primary site [default: false]
   --auto-approve          Auto-approve changes (for apply and destroy)
   --force                 Force reinitialization (for init)
   --detailed              Show detailed output (for plan)
+  --skip-vars-from-gcs    Skip copying TF variables and Kuberenetes resources from GCS bucket (default: false)
+  --gcs-bucket-name       GCS bucket name to copy TF variables and Kuberenetes resources from (default: mlisa-dr-resource-backup)
 
 Examples:
   $0 stg r1-rai init
   $0 prod-us rai plan
-  $0 stg r1-rai init --refresh-gcp-resource-vars --target-site dr
+  $0 stg r1-rai init --target-site dr
   $0 prod-eu r1-rai apply --auto-approve
+  $0 prod-asia rai apply --skip-vars-from-gcs --gcs-bucket-name mlisa-dr-resource-backup
   $0 stg rai destroy
   $0 prod-asia r1-rai show
 
@@ -64,9 +66,8 @@ validate_args() {
     local environment=$1
     local cluster=$2
     local action=$3
-    local target_site=$4    
-    local refresh_gcp_resource_vars=$5
-    
+    local target_site=$4   
+    local skip_vars_from_gcs=$5
     # Validate environment
     case $environment in
         stg|prod-us|prod-eu|prod-asia)
@@ -91,11 +92,11 @@ validate_args() {
     
     # Validate action
     case $action in
-        init|plan|apply|destroy|output|show)
+        init|plan|apply|destroy|output|show|get_replacement_values)
             ;;
         *)
             print_error "Invalid action: $action"
-            print_info "Valid actions: init, plan, apply, destroy, output, show"
+            print_info "Valid actions: init, plan, apply, destroy, output, show, get_replacement_values"
             exit 1
             ;;
     esac
@@ -111,13 +112,13 @@ validate_args() {
             ;;
     esac
 
-    # Validate refresh gcp resources
-    case $refresh_gcp_resource_vars in
+    # Validate skip vars from gcs
+    case $skip_vars_from_gcs in
         true|false)
             ;;
         *)
-            print_error "Invalid refresh gcp resources: $refresh_gcp_resource_vars"
-            print_info "Valid refresh gcp resources: true, false"
+            print_error "Invalid skip vars from gcs: $skip_vars_from_gcs"
+            print_info "Valid skip vars from gcs: true, false"
             exit 1
             ;;
     esac
@@ -163,20 +164,17 @@ main() {
     
     # Parse options
     local target_site="primary"
-    local refresh_gcp_resource_vars="false"
     local auto_approve=""
     local force=""
     local detailed=""
-    
+    local skip_vars_from_gcs="false"
+    local gcs_bucket_name="mlisa-dr-resource-backup"
+
     while [[ $# -gt 0 ]]; do
         case $1 in
             --target-site)
                 target_site=$2
                 shift 2
-                ;;
-            --refresh-gcp-resource-vars)
-                refresh_gcp_resource_vars="true"
-                shift
                 ;;
             --auto-approve)
                 auto_approve="--auto-approve"
@@ -190,6 +188,14 @@ main() {
                 detailed="--detailed"
                 shift
                 ;;
+            --skip-vars-from-gcs)
+                skip_vars_from_gcs="true"
+                shift
+                ;;
+            --gcs-bucket-name)
+                gcs_bucket_name=$2
+                shift 2
+                ;;
             *)
                 print_error "Unknown option: $1"
                 show_usage
@@ -199,7 +205,7 @@ main() {
     done
     
     # Validate arguments
-    validate_args "$environment" "$cluster" "$action" "$target_site" "$refresh_gcp_resource_vars"
+    validate_args "$environment" "$cluster" "$action" "$target_site" "$skip_vars_from_gcs"
     
     # Check prerequisites
     check_python_script
@@ -212,10 +218,6 @@ main() {
     cmd="$cmd --target-site $target_site"
     cmd="$cmd --action $action"
     
-    if [[ "$refresh_gcp_resource_vars" == "true" ]]; then
-        cmd="$cmd --refresh-gcp-resource-vars"
-    fi
-    
     if [[ -n $auto_approve ]]; then
         cmd="$cmd $auto_approve"
     fi
@@ -227,7 +229,24 @@ main() {
     if [[ -n $detailed ]]; then
         cmd="$cmd $detailed"
     fi
+
+    if [[ $action == "get_replacement_values" ]]; then
+        if ! eval $cmd; then
+            print_error "Replacement values retrieval failed"
+            exit 1
+        fi
+        exit 0
+    fi
     
+    # Read GCS vars
+    if [[ $skip_vars_from_gcs == "false" ]]; then
+        print_info "Copying TF variables and Kuberenetes resources from GCS bucket..."
+        gcloud storage cp --recursive "gs://$gcs_bucket_name/tf-vars" "$PWD"
+        gcloud storage cp --recursive "gs://$gcs_bucket_name/kube-resources" "$PWD"
+        print_success "TF variables and Kuberenetes resources copied from GCS bucket successfully"
+    else
+        print_info "Skipping copy of TF variables and Kuberenetes resources from GCS bucket"
+    fi
     # Execute command
     print_info "Executing: $cmd"
     echo

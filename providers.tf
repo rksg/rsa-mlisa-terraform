@@ -15,6 +15,11 @@ terraform {
     }
   }
   
+  backend "gcs" {
+    bucket  = "mlisa-dr-terraform-state"
+    prefix  = "terraform/state"
+  }
+  
 }
 
 provider "google" {

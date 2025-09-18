@@ -9,10 +9,6 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 6.44.0"
     }
-    google-beta = {
-      source  = "hashicorp/google-beta"
-      version = "~> 6.44.0"
-    }
   }
   
   backend "gcs" {
@@ -23,11 +19,7 @@ terraform {
 }
 
 provider "google" {
-  project = var.project
-  region  = var.region
-}
-
-provider "google-beta" {
+  credentials = "./creds-file.json"
   project = var.project
   region  = var.region
 }

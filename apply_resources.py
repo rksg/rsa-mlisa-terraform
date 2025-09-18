@@ -8,7 +8,7 @@ import os
 import sys
 import tempfile
 import subprocess
-import yaml
+import json
 import re
 
 
@@ -31,20 +31,11 @@ def clean_yaml(content):
     return content if content.endswith('\n') else content + '\n'
 
 
-def load_replacements(file_path):
-    """Load replacements from YAML file"""
-    with open(file_path, 'r') as f:
-        data = yaml.safe_load(f)
-    return data.get('replacements', [])
-
-
-def apply_replacements(content, replacements):
+def apply_replacements(content, replacementsJson):
     """Apply string replacements to content"""
-    for replacement in replacements:
-        search = replacement.get('search', '')
-        replace = replacement.get('replace', '')
-        if search and replace:
-            content = content.replace(search, replace)
+    for key,value in replacementsJson.items():
+        if key and value:
+            content = content.replace('||' + key + '||', value)
     return content
 
 
@@ -72,18 +63,22 @@ def apply_to_k8s(file_path, context=None, dry_run=False):
 def main():
     parser = argparse.ArgumentParser(description="Apply Kubernetes resources with replacements")
     parser.add_argument('-f', '--file', required=True, help='Resources YAML file')
-    parser.add_argument('-r', '--replacements', required=True, help='Replacements YAML file')
+    parser.add_argument('-r', '--replacements', required=True, help='Replacements JSON string')
     parser.add_argument('-c', '--context', help='Kubernetes context')
     parser.add_argument('-d', '--dry-run', action='store_true', help='Dry run mode')
     
     args = parser.parse_args()
     
-    # Validate files exist
+    # Validate resources file exists
     if not os.path.isfile(args.file):
         log(f"Resources file not found: {args.file}", "ERROR")
         sys.exit(1)
-    if not os.path.isfile(args.replacements):
-        log(f"Replacements file not found: {args.replacements}", "ERROR")
+    
+    # Validate JSON string format
+    try:
+        replacementJson = json.loads(args.replacements)
+    except json.JSONDecodeError as e:
+        log(f"Invalid JSON format in replacements: {e}", "ERROR")
         sys.exit(1)
     
     check_dependencies()
@@ -94,8 +89,7 @@ def main():
     content = clean_yaml(content)
     
     # Load and apply replacements
-    replacements = load_replacements(args.replacements)
-    content = apply_replacements(content, replacements)
+    content = apply_replacements(content, replacementJson)
     
     # Write to temporary file and apply
     with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp:
@@ -103,7 +97,8 @@ def main():
         tmp_path = tmp.name
     
     try:
-        apply_to_k8s(tmp_path, args.context, args.dry_run)
+        print(content)
+        #apply_to_k8s(tmp_path, args.context, args.dry_run)
     finally:
         os.unlink(tmp_path)
 

@@ -388,15 +388,16 @@ class TerraformWrapper:
         if not self._check_terraform_installed():
             return False
         
+        # Execute the requested action
+        if action == TerraformAction.INIT:
+            return self._run_terraform_init(force=kwargs.get('force', False))
+        
         # Manage workspace
         if not self._create_or_switch_workspace():
             return False
         
         # Execute the requested action
-        if action == TerraformAction.INIT:
-            return self._run_terraform_init(force=kwargs.get('force', False))
-        
-        elif action == TerraformAction.PLAN:
+        if action == TerraformAction.PLAN:
             return self._run_terraform_plan(detailed=kwargs.get('detailed', False))
         
         elif action == TerraformAction.APPLY:
@@ -524,7 +525,6 @@ Examples:
             replacement_values = wrapper._run_terraform_get_replacement_values()
             print(replacement_values)
             sys.exit(0)
-        
         success = wrapper.execute_action(
             action,
             auto_approve=args.auto_approve,

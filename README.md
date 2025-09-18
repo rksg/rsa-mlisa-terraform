@@ -45,7 +45,6 @@ rsa-mlisa-terraform/
 ├── terraform_wrapper.py             # Python wrapper for Terraform operations
 ├── apply_resources.py               # Kubernetes resource deployment script
 ├── tf.sh                           # Shell wrapper script
-├── sample_replacements.yaml         # Sample string replacements for K8s
 ├── modules/                         # Terraform modules
 │   ├── cloud_function/              # Cloud Functions module
 │   ├── cloud_run/                   # Cloud Run services module
@@ -197,14 +196,14 @@ python3 terraform_wrapper.py --environment stg --cluster rai --action get_replac
 Use `apply_resources.py` to deploy Kubernetes resources with string replacements:
 
 ```bash
-# Basic deployment
-python3 apply_resources.py -f kube-resources/stg/rai-druid-resources.yaml -r sample_replacements.yaml
+# Basic deployment with JSON string
+python3 apply_resources.py -f kube-resources/stg/rai-druid-resources.yaml -r '{"postgresql_druid_host" : "10.216.116.45"}'
 
 # With specific Kubernetes context
-python3 apply_resources.py -f kube-resources/stg/rai-kafka-resources.yaml -r sample_replacements.yaml -c production
+python3 apply_resources.py -f kube-resources/stg/rai-kafka-resources.yaml -r '{"postgresql_druid_host" : "10.216.116.45"}' -c production
 
 # Dry run mode
-python3 apply_resources.py -f kube-resources/stg/rai-druid-resources.yaml -r sample_replacements.yaml --dry-run
+python3 apply_resources.py -f kube-resources/stg/rai-druid-resources.yaml -r '{"postgresql_druid_host" : "10.216.116.45"}' --dry-run
 ```
 
 ## 📋 Available Actions
@@ -264,18 +263,18 @@ python3 apply_resources.py -f kube-resources/stg/rai-druid-resources.yaml -r sam
 ### 3. Kubernetes Deployment
 
 ```bash
-# Step 1: Get infrastructure values
-./tf.sh stg rai get_replacement_values --target-site dr > replacements.yaml
+# Step 1: Get infrastructure values as JSON string
+REPLACEMENTS=$(./tf.sh stg rai get_replacement_values --target-site dr)
 
 # Step 2: Deploy Kubernetes resources
 python3 apply_resources.py \
   -f kube-resources/stg/rai-druid-resources.yaml \
-  -r replacements.yaml
+  -r "$REPLACEMENTS"
 
 # Step 3: Deploy Kafka resources
 python3 apply_resources.py \
   -f kube-resources/stg/rai-kafka-resources.yaml \
-  -r replacements.yaml
+  -r "$REPLACEMENTS"
 ```
 
 ## 🏷️ Workspace Naming
@@ -325,6 +324,7 @@ Python script for deploying Kubernetes resources with string replacements.
 
 #### Key Features
 - **String Replacements**: Applies multiple string replacements to YAML files
+- **JSON String Input**: Accepts replacement configurations as JSON strings
 - **YAML Cleaning**: Automatically removes trailing `%` characters
 - **Kubernetes Integration**: Uses kubectl for resource deployment
 - **Dry Run Support**: Test changes without applying them
@@ -333,21 +333,11 @@ Python script for deploying Kubernetes resources with string replacements.
 #### Usage Examples
 
 ```bash
-# Basic deployment
-python3 apply_resources.py -f resources.yaml -r replacements.yaml
+# Basic deployment with JSON string
+python3 apply_resources.py -f resources.yaml -r ''{"postgresql_druid_host" : "10.216.116.45"}''
 
 # With context and dry run
-python3 apply_resources.py -f resources.yaml -r replacements.yaml -c production --dry-run
-```
-
-#### Replacement File Format
-
-```yaml
-replacements:
-  - search: "||postgresql_druid_host||"
-    replace: "10.216.116.45"
-  - search: "||hdfs_host||"
-    replace: "hdfs://mlisa-sa-stage-0-dpc-80ca74-mlisa-dpc-druid-dr-m.us-west1-b.c.ruckussgdc-mlisa-beta.internal"
+python3 apply_resources.py -f resources.yaml -r ''{"postgresql_druid_host" : "10.216.116.45"}'' -c production --dry-run
 ```
 
 ## 🔧 Environment Variables
@@ -395,12 +385,12 @@ The system includes comprehensive error handling:
 ./tf.sh stg rai plan --target-site dr
 ./tf.sh stg rai apply --target-site dr
 
-# Step 3: Get replacement values
-./tf.sh stg rai get_replacement_values --target-site dr > replacements.yaml
+# Step 3: Get replacement values as JSON string
+REPLACEMENTS=$(./tf.sh stg rai get_replacement_values --target-site dr)
 
 # Step 4: Deploy Kubernetes workloads
-python3 apply_resources.py -f kube-resources/stg/rai-druid-resources.yaml -r replacements.yaml
-python3 apply_resources.py -f kube-resources/stg/rai-kafka-resources.yaml -r replacements.yaml
+python3 apply_resources.py -f kube-resources/stg/rai-druid-resources.yaml -r "$REPLACEMENTS"
+python3 apply_resources.py -f kube-resources/stg/rai-kafka-resources.yaml -r "$REPLACEMENTS"
 ```
 
 ### 2. Production Deployment with Auto-approve
@@ -466,16 +456,16 @@ done
 ### 7. Kubernetes Resource Management
 
 ```bash
-# Deploy with specific context
+# Deploy with specific context using JSON string
 python3 apply_resources.py \
   -f kube-resources/stg/rai-druid-resources.yaml \
-  -r sample_replacements.yaml \
+  -r '{"postgresql_druid_host" : "10.216.116.45"}' \
   -c production
 
 # Dry run deployment
 python3 apply_resources.py \
   -f kube-resources/stg/rai-kafka-resources.yaml \
-  -r sample_replacements.yaml \
+  -r '{"postgresql_druid_host" : "10.216.116.45"}' \
   --dry-run
 ```
 
@@ -536,7 +526,7 @@ For detailed debugging, run commands with verbose output:
 python3 -v terraform_wrapper.py --environment stg --cluster rai --action plan
 
 # Debug Kubernetes deployment
-python3 apply_resources.py -f resources.yaml -r replacements.yaml --dry-run
+python3 apply_resources.py -f resources.yaml -r '{"postgresql_druid_host" : "10.216.116.45"}' --dry-run
 ```
 
 ### Validation Commands

@@ -523,7 +523,7 @@ Examples:
 
         if action == TerraformAction.GET_REPLACEMENT_VALUES:
             replacement_values = wrapper._run_terraform_get_replacement_values()
-            print(replacement_values)
+            print(json.dumps(replacement_values))
             sys.exit(0)
         success = wrapper.execute_action(
             action,

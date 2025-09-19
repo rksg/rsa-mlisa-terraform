@@ -12,7 +12,7 @@ terraform {
   }
   
   backend "gcs" {
-    bucket  = "alt_test_beta_1"
+    bucket  = "mlisa-dr-terraform-state"
     prefix  = "terraform/state"
   }
   

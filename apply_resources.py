@@ -97,8 +97,8 @@ def main():
         tmp_path = tmp.name
     
     try:
-        print(content)
-        #apply_to_k8s(tmp_path, args.context, args.dry_run)
+        #print(content)
+        apply_to_k8s(tmp_path, args.context, args.dry_run)
     finally:
         os.unlink(tmp_path)
 

@@ -265,17 +265,23 @@ class TerraformWrapper:
             hdfs_host = "hdfs://" + output_data["dpc_master_node"]["value"][0]
             hdfs_yarn_rm_host = output_data["dpc_master_node"]["value"][0]
             
-            postgresql_druid_host = None
             for key, value in output_data["sql_private_ip_address"]["value"].items():
                 if "mlisa-sql-druid" in key:
                     postgresql_druid_host = value["private_ip_address"]
-                    break
+                elif "mlisa-sql-mlisa" in key:
+                    postgresql_mlisa_host = value["private_ip_address"]
+                else:
+                    print(f"Warning: No PostgreSQL host found for {key}")
             
             if postgresql_druid_host is None:
                 print("Warning: No PostgreSQL Druid host found")
                 postgresql_druid_host = ""
             
-            return {"hdfs_host": hdfs_host, "hdfs_yarn_rm_host": hdfs_yarn_rm_host, "postgresql_druid_host": postgresql_druid_host}
+            if postgresql_mlisa_host is None:
+                print("Warning: No PostgreSQL MLISA host found")
+                postgresql_mlisa_host = ""
+            
+            return {"hdfs_host": hdfs_host, "hdfs_yarn_rm_host": hdfs_yarn_rm_host, "postgresql_druid_host": postgresql_druid_host, "postgresql_mlisa_host": postgresql_mlisa_host}
         except json.JSONDecodeError as e:
             print(f"❌ Error parsing JSON output: {e}")
             return {}

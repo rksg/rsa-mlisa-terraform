@@ -63,7 +63,7 @@ def apply_to_k8s(file_path, context=None, dry_run=False):
 def main():
     parser = argparse.ArgumentParser(description="Apply Kubernetes resources with replacements")
     parser.add_argument('-f', '--file', required=True, help='Resources YAML file')
-    parser.add_argument('-r', '--replacements', required=True, help='Replacements JSON string')
+    parser.add_argument('-r', '--replacements', required=True, help='Replacements JSON file path')
     parser.add_argument('-c', '--context', help='Kubernetes context')
     parser.add_argument('-d', '--dry-run', action='store_true', help='Dry run mode')
     
@@ -74,11 +74,20 @@ def main():
         log(f"Resources file not found: {args.file}", "ERROR")
         sys.exit(1)
     
-    # Validate JSON string format
+    # Validate replacements JSON file exists
+    if not os.path.isfile(args.replacements):
+        log(f"Replacements JSON file not found: {args.replacements}", "ERROR")
+        sys.exit(1)
+    
+    # Load and validate JSON file format
     try:
-        replacementJson = json.loads(args.replacements)
+        with open(args.replacements, 'r') as f:
+            replacementJson = json.load(f)
     except json.JSONDecodeError as e:
-        log(f"Invalid JSON format in replacements: {e}", "ERROR")
+        log(f"Invalid JSON format in replacements file: {e}", "ERROR")
+        sys.exit(1)
+    except Exception as e:
+        log(f"Error reading replacements file: {e}", "ERROR")
         sys.exit(1)
     
     check_dependencies()

@@ -42,7 +42,8 @@ resource "google_sql_database_instance" "postgres" {
 
 resource "google_sql_database" "database" {
   depends_on =[
-    resource.google_sql_database_instance.postgres
+    resource.google_sql_database_instance.postgres,
+    resource.google_sql_user.users
   ]
   for_each = { for idx, database in var.databases : database => database }
   name     = each.value

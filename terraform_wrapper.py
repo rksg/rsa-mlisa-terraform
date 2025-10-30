@@ -7,7 +7,7 @@ Supports primary and disaster recovery (DR) site deployments with automatic GCP 
 
 Key Features:
 - Automated Terraform workspace management
-- Multi-environment and cluster support (stg, prod-us, prod-eu, prod-asia)
+- Multi-environment and cluster support (beta, dev, qa, stg, prod-us, prod-eu, prod-asia)
 - Primary/DR site deployment support
 - GCP resource discovery and tfvars generation
 - Interactive user confirmation for destructive operations
@@ -47,7 +47,7 @@ class TerraformWrapper:
         Initialize the Terraform wrapper.
         
         Args:
-            environment: Target environment (stg, prod-us, prod-eu, prod-asia)
+            environment: Target environment (beta, dev, qa, stg, prod-us, prod-eu, prod-asia)
             cluster: Cluster type (rai, r1-rai)
             target_site: Deployment target (primary or dr)
         """
@@ -178,17 +178,21 @@ class TerraformWrapper:
         print("✅ terraform init completed successfully")
         return True
     
-    def _run_terraform_plan(self, detailed: bool = False) -> bool:
+    def _run_terraform_plan(self, detailed: bool = False, target: str = None) -> bool:
         """
         Execute terraform plan command.
         
         Args:
             detailed: Whether to show detailed exit codes
+            target: Target specific resource/module
             
         Returns:
             True if successful, False otherwise
         """
         print("📋 Running terraform plan...")
+        if target:
+            print(f"   Targeting: {target}")
+        print("   ℹ️  Terraform will acquire a state lock for read operations (this is normal)")
         
         command = ["terraform", "plan"]
         
@@ -198,6 +202,9 @@ class TerraformWrapper:
         
         if detailed:
             command.append("-detailed-exitcode")
+        
+        if target:
+            command.extend(["-target", target])
         
         return_code, stdout, stderr = self._run_command(command)
         
@@ -217,12 +224,13 @@ class TerraformWrapper:
             print(f"⚠️  Unexpected return code from terraform plan: {return_code}")
             return False
     
-    def _run_terraform_apply(self, auto_approve: bool = False) -> bool:
+    def _run_terraform_apply(self, auto_approve: bool = False, target: str = None) -> bool:
         """
         Execute terraform apply command.
         
         Args:
             auto_approve: Whether to auto-approve changes
+            target: Target specific resource/module
             
         Returns:
             True if successful, False otherwise
@@ -237,6 +245,9 @@ class TerraformWrapper:
         
         if auto_approve:
             command.append("-auto-approve")
+        
+        if target:
+            command.extend(["-target", target])
         
         return_code, stdout, stderr = self._run_command(command, capture_output=False)
         
@@ -404,7 +415,7 @@ class TerraformWrapper:
         
         # Execute the requested action
         if action == TerraformAction.PLAN:
-            return self._run_terraform_plan(detailed=kwargs.get('detailed', False))
+            return self._run_terraform_plan(detailed=kwargs.get('detailed', False), target=kwargs.get('target'))
         
         elif action == TerraformAction.APPLY:
             auto_approve = kwargs.get('auto_approve', False)
@@ -412,7 +423,7 @@ class TerraformWrapper:
                 if not self._confirm_action("terraform apply"):
                     print("❌ Operation cancelled by user")
                     return False
-            return self._run_terraform_apply(auto_approve=auto_approve)
+            return self._run_terraform_apply(auto_approve=auto_approve, target=kwargs.get('target'))
         
         elif action == TerraformAction.DESTROY:
             auto_approve = kwargs.get('auto_approve', False)
@@ -471,7 +482,7 @@ Examples:
     parser.add_argument(
         '--environment',
         required=True,
-        choices=['stg', 'prod-us', 'prod-eu', 'prod-asia'],
+        choices=['beta', 'dev', 'qa', 'stg', 'prod-us', 'prod-eu', 'prod-asia'],
         help='Target environment for deployment'
     )
     
@@ -514,6 +525,11 @@ Examples:
         help='Show detailed exit codes (for plan action)'
     )
     
+    parser.add_argument(
+        '--target',
+        help='Target specific resource/module (for plan/apply actions)'
+    )
+    
     args = parser.parse_args()
     
     try:
@@ -535,7 +551,8 @@ Examples:
             action,
             auto_approve=args.auto_approve,
             force=args.force,
-            detailed=args.detailed
+            detailed=args.detailed,
+            target=args.target
         )
 
         if success:

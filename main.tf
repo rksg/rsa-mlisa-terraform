@@ -63,24 +63,68 @@ data "external" "check_dataproc_cluster" {
   ]
 }
 
+# Generate random 6-character string for each cluster name
+resource "random_id" "dpc_cluster_suffix" {
+  # Use semantic keys: "production" and "migration" for repeatable migration workflow
+  for_each = var.dataproc_cluster != null ? (
+    var.dataproc_cluster.cluster_count == 1 
+      ? { "production" = true }  # When count=1, only production cluster exists
+      : { "production" = true, "migration" = true }  # When count=2, both exist
+  ) : {}
+  byte_length = 3  # 3 bytes = 6 hex characters
+  
+  # Keep the same value after initial creation - only regenerate if manually tainted
+  # If you want a new cluster with new suffix, use: terraform taint random_id.dpc_cluster_suffix["cluster-<index>"]
+}
+
 # Local value to read the flag
 locals {
   should_create_cluster = data.external.check_dataproc_cluster.result.should_create == "true"
+  
+  # Generate cluster map with semantic keys for repeatable migration workflow
+  # Key insight: After migration, "migration" cluster becomes production
+  # So when count=1, we need to use "migration" key if it exists in state, otherwise "production"
+  # Strategy: When count=1, use "production" key (will be the current cluster)
+  #          When count=2, both "production" (current/old) and "migration" (new) exist
+  #          After reducing to count=1, manually run: terraform state mv module.dataproc_cluster[\"migration\"] module.dataproc_cluster[\"production\"]
+  #          Or: After migration, delete the old production manually, then reduce count
+  dpc_cluster_map = var.dataproc_cluster != null ? (
+    var.dataproc_cluster.cluster_count == 1 
+      ? { 
+          "production" = {
+            name = "${var.dataproc_cluster.cluster_name}-${random_id.dpc_cluster_suffix["production"].hex}"
+          }
+        }
+      : {
+          "production" = {
+            name = "${var.dataproc_cluster.cluster_name}-${random_id.dpc_cluster_suffix["production"].hex}"
+          },
+          "migration" = {
+            name = "${var.dataproc_cluster.cluster_name}-${random_id.dpc_cluster_suffix["migration"].hex}"
+          }
+        }
+  ) : {}
 }
 
 # Call the dataproc module based on the flag
 module "dataproc_cluster" {
   source = "./modules/dataproc"
-  depends_on = [
-    module.subnetworks,
-    module.firewall
-  ]
-  count  = local.should_create_cluster ? 1 : 0
+
+# disable temporarily to create only dataproc cluster for migration
+#  depends_on = [
+#    module.subnetworks,
+#    module.firewall
+#  ]
+
+  for_each = local.should_create_cluster && var.dataproc_cluster != null ? local.dpc_cluster_map : {}
   
   # Use values from tfvars.json structure
   project        = var.project
   region         = var.region
-  cluster_name   = var.dataproc_cluster.cluster_name
+  # Create unique cluster names with semantic keys for repeatable migration
+  # When count=1: "production" (current) = main cluster name
+  # After migration, "production" key keeps the same resource, but "migration" is deleted
+  cluster_name   = each.value.name
   labels         = var.dataproc_cluster.labels
   cluster_config = var.dataproc_cluster.cluster_config
   

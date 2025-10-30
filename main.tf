@@ -122,7 +122,6 @@ module "dataproc_cluster" {
   project        = var.project
   region         = var.region
   # Create unique cluster names with semantic keys for repeatable migration
-  # When count=2: "production" (old) = cluster-1, "migration" (new) = cluster-0
   # When count=1: "production" (current) = main cluster name
   # After migration, "production" key keeps the same resource, but "migration" is deleted
   cluster_name   = each.value.name

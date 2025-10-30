@@ -12,6 +12,7 @@ This project provides a complete infrastructure-as-code solution for deploying a
 - **Kubernetes Integration**: Automated deployment of MLISA workloads
 - **Disaster Recovery**: Complete primary/DR site support
 - **Multi-Environment**: Support for staging and production environments
+- **Migration Scripts**: Automated cluster state migration for DataProc cluster upgrades
 
 ### Supported GCP Resources
 - **Networking**: VPC, Subnets, NAT Gateways, VPC Connectors, Firewall Rules
@@ -45,6 +46,7 @@ rsa-mlisa-terraform/
 ├── terraform_wrapper.py             # Python wrapper for Terraform operations
 ├── apply_resources.py               # Kubernetes resource deployment script
 ├── tf.sh                           # Shell wrapper script
+├── migrate_dpccluster_state.sh      # DataProc cluster state migration script
 ├── modules/                         # Terraform modules
 │   ├── cloud_function/              # Cloud Functions module
 │   ├── cloud_run/                   # Cloud Run services module
@@ -168,6 +170,15 @@ The `tf.sh` script provides a simplified interface for common operations:
 
 # Get replacement values for Kubernetes
 ./tf.sh stg rai get_replacement_values --target-site dr
+
+# Terraform plan/apply actions for only target resource
+
+**Usage:**
+./tf.sh beta rai plan --target "module.dataproc_cluster"
+./tf.sh beta rai apply --target "module.dataproc_cluster"
+
+This enables targeted Terraform operations on specific resources/modules, useful for incremental deployments and troubleshooting.
+
 ```
 
 ### Python Script (Advanced)
@@ -226,6 +237,7 @@ python3 apply_resources.py -f kube-resources/stg/rai-druid-resources.yaml -r rep
 | `--auto-approve` | Skip confirmation prompts | apply, destroy | false |
 | `--force` | Force reinitialization | init | false |
 | `--detailed` | Show detailed exit codes | plan | false |
+| `--target` | Target specific resource/module | All | false |
 | `--skip-vars-from-gcs` | Skip GCS variable sync | All | false |
 | `--gcs-bucket-name` | Custom GCS bucket name | All | mlisa-dr-resource-backup |
 
@@ -467,6 +479,35 @@ python3 apply_resources.py \
   -f kube-resources/stg/rai-kafka-resources.yaml \
   -r replacements.json \
   --dry-run
+```
+
+##  Dataproc Cluster Migration Workflow
+
+The new migration workflow supports safe dataproc cluster migrations:
+
+1. **Start Migration**: Set `cluster_count: 2` in tfvars → creates both production (old) and migration (new) clusters and use terraform plan/apply to create second cluster
+2. **Migrate Data**: Copy data from production to migration cluster
+3. **Complete Migration**: Run `migrate_dpccluster_state.sh` to swap state, then `terraform apply` to delete old cluster related output values
+4. **Delete old-cluster**: Delete the old cluster after all the etl and druid application are running without any issue
+
+### Dataproc Migration State Script
+
+**Filename:**
+- `migrate_dpccluster_state.sh` - Automated script to swap dataproc cluster state after migration
+
+**Functionality:**
+- Removes old production cluster from Terraform state
+- Promotes migration cluster to production in state
+- Updates `cluster_count` from 2 to 1 in tfvars file
+- Supports `--auto-apply` flag for automated workflow
+
+**Usage:**
+```bash
+# Basic migration
+./migrate_dpccluster_state.sh beta rai
+
+# With auto-apply
+./migrate_dpccluster_state.sh stg r1-rai --auto-apply
 ```
 
 ## 🔧 Troubleshooting

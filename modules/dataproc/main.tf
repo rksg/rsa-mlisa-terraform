@@ -7,7 +7,8 @@ resource "google_dataproc_cluster" "dpc_cluster" {
 
   lifecycle {
     ignore_changes = [
-      labels
+      labels,
+      name  # Ignore name changes to prevent recreation due to random suffix
     ]
   }
   

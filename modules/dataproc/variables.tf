@@ -30,7 +30,6 @@ variable "cluster_config" {
     master_config = object({
       num_instances    = number
       machine_type     = string
-      image            = string
       preemptibility   = string
       disk_config = object({
         boot_disk_size_gb = number
@@ -40,7 +39,6 @@ variable "cluster_config" {
     worker_config = object({
       num_instances    = number
       machine_type     = string
-      image            = string
       preemptibility   = string
       disk_config = object({
         boot_disk_size_gb = number

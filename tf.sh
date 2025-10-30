@@ -37,7 +37,7 @@ Terraform Wrapper Script
 Usage: $0 <environment> <cluster> <action> [options]
 
 Arguments:
-  environment    Environment to deploy to (stg, prod-us, prod-eu, prod-asia)
+  environment    Environment to deploy to (beta, dev, qa, stg, prod-us, prod-eu, prod-asia)
   cluster        Cluster type (rai, r1-rai)
   action         Terraform action (init, plan, apply, destroy, output, show, get_replacement_values)
 
@@ -46,6 +46,7 @@ Options:
   --auto-approve          Auto-approve changes (for apply and destroy)
   --force                 Force reinitialization (for init)
   --detailed              Show detailed output (for plan)
+  --target <resource>     Target specific resource/module (for plan/apply)
   --skip-vars-from-gcs    Skip copying TF variables and Kuberenetes resources from GCS bucket (default: false)
   --gcs-bucket-name       GCS bucket name to copy TF variables and Kuberenetes resources from (default: mlisa-dr-resource-backup)
 
@@ -57,6 +58,7 @@ Examples:
   $0 prod-asia rai apply --skip-vars-from-gcs --gcs-bucket-name mlisa-dr-resource-backup
   $0 stg rai destroy
   $0 prod-asia r1-rai show
+  $0 beta rai plan --target "module.dataproc_cluster"
 
 EOF
 }
@@ -70,11 +72,11 @@ validate_args() {
     local skip_vars_from_gcs=$5
     # Validate environment
     case $environment in
-        stg|prod-us|prod-eu|prod-asia)
+        beta|dev|qa|stg|prod-us|prod-eu|prod-asia)
             ;;
         *)
             print_error "Invalid environment: $environment"
-            print_info "Valid environments: stg, prod-us, prod-eu, prod-asia"
+            print_info "Valid environments: beta, dev, qa, stg, prod-us, prod-eu, prod-asia"
             exit 1
             ;;
     esac
@@ -167,6 +169,7 @@ main() {
     local auto_approve=""
     local force=""
     local detailed=""
+    local target=""
     local skip_vars_from_gcs="false"
     local gcs_bucket_name="mlisa-dr-resource-backup"
 
@@ -187,6 +190,10 @@ main() {
             --detailed)
                 detailed="--detailed"
                 shift
+                ;;
+            --target)
+                target="--target $2"
+                shift 2
                 ;;
             --skip-vars-from-gcs)
                 skip_vars_from_gcs="true"
@@ -228,6 +235,10 @@ main() {
     
     if [[ -n $detailed ]]; then
         cmd="$cmd $detailed"
+    fi
+
+    if [[ -n $target ]]; then
+        cmd="$cmd $target"
     fi
 
     if [[ $action == "get_replacement_values" ]]; then

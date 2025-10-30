@@ -71,6 +71,7 @@ variable "dataproc_cluster" {
   description = "DataProc cluster configuration"
   type = object({
     cluster_name = string
+    cluster_count = optional(number, 1)  # Number of clusters to create (1 or 2 for migration)
     labels       = map(string)
     cluster_config = object({
       gce_cluster_config = object({
@@ -81,7 +82,7 @@ variable "dataproc_cluster" {
       master_config = object({
         num_instances    = number
         machine_type     = string
-        image            = string
+        image            = optional(string)
         preemptibility   = string
         disk_config = object({
           boot_disk_size_gb = number
@@ -91,7 +92,7 @@ variable "dataproc_cluster" {
       worker_config = object({
         num_instances    = number
         machine_type     = string
-        image            = string
+        image            = optional(string)
         preemptibility   = string
         disk_config = object({
           boot_disk_size_gb = number
